@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jetsci"
+version = "0.1.0"
+description = "Sparse linear and nonlinear solver utilities using JAX."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+    "jax",
+    "numpy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+cuda12 = [
+    "cupy-cuda12x",
+    "jax[cuda12]",
+]
+cuda13 = [
+    "cupy-cuda13x",
+    "jax[cuda13]",
+]
+dev = [
+    "pytest",
+]
+pardiso = [
+    "pypardiso",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+]
