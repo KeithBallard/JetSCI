@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 
 import jax
@@ -24,75 +24,8 @@ _PETSC_PC_TYPES = {
 }
 
 
-@dataclass
-class PETScNonlinearSolver:
-    """Own the PETSc SNES object and its callback companion objects."""
-
-    snes: object
-    residual_callback: Callable
-    jacobian_callback: Callable
-    options: SolverOptions
-    residual_vec: object | None = None
-    jacobian_mat: object | None = None
-
-    def initialize_from_x0(self, x0):
-        """Allocate PETSc Vec/Mat objects that require the state size."""
-        from petsc4py import PETSc
-
-        self.cleanup_work_vectors()
-        x0_vec = jaxArrayToPETScVec(x0)
-        try:
-            self.residual_vec = x0_vec.duplicate()
-            self.jacobian_mat = PETSc.Mat().create(PETSc.COMM_WORLD)
-            self.snes.setFunction(self.residual_callback, self.residual_vec)
-            self.snes.setJacobian(self.jacobian_callback, self.jacobian_mat, self.jacobian_mat)
-        finally:
-            x0_vec.destroy()
-        return self
-
-    def solve(self, x0):
-        """Solve with this SNES object and return a PETSc Vec.
-
-        The caller owns the returned Vec and is responsible for destroying it.
-        """
-        if self.residual_vec is None or self.jacobian_mat is None:
-            self.initialize_from_x0(x0)
-
-        x0_vec = jaxArrayToPETScVec(x0)
-        x = x0_vec.duplicate()
-        try:
-            x0_vec.copy(x)
-            self.snes.solve(None, x)
-            return x
-        finally:
-            x0_vec.destroy()
-
-    def solve_to_jax(self, x0):
-        """Solve and explicitly copy the PETSc Vec result into a JAX array."""
-        x = self.solve(x0)
-        try:
-            result = petscVecToJAX(x).copy()
-            result.block_until_ready()
-            return result
-        finally:
-            x.destroy()
-
-    def linear_solve(self, x0):
-        pass
-
-    def cleanup_work_vectors(self):
-        """Destroy residual/Jacobian objects that depend on vector size."""
-        if self.residual_vec is not None:
-            self.residual_vec.destroy()
-            self.residual_vec = None
-        if self.jacobian_mat is not None:
-            self.jacobian_mat.destroy()
-            self.jacobian_mat = None
-
-    def destroy(self):
-        """Destroy all PETSc objects owned by this wrapper."""
-        self.cleanup_work_vectors()
-        self.snes.destroy()
+# Stores a map from a key to the solver object, allowing reuse between nonlinear solve calls
+__solver_dict = {}
 
 
 def _coo_jacobian_function(R: Callable, J: Callable | None):
@@ -162,6 +95,36 @@ def build_petsc_snes_from_options(R: Callable, J: Callable | None, options: Solv
     )
 
 
+def build_petsc_solver_with_reuse(
+    options: SolverOptions,
+    R: jax.tree_util.Partial,
+    J: jax.tree_util.Partial,
+    x0: jnp.ndarry | None = None,
+):
+    """Return a solver and SolverOptions containing its dictionary key.
+
+    If `options.solver_key` is `None`, a new PETSc solver is built and stored.
+    If a key is present, the existing solver is retrieved and refreshed with
+    the latest callbacks and method options.
+    """
+
+    validate_solver_options(options)
+
+    if options.solver_key is None:
+        solver = solverConstructionBuilding.buildPETScSolverFromOptions(R, J, options)
+        solver_key = _new_solver_key()
+        __solver_dict[solver_key] = solver
+        return solver, replace(options, solver_key=solver_key)
+
+    if options.solver_key not in __solver_dict:
+        raise KeyError(f"No PETSc solver found for solver_key={options.solver_key}")
+
+    solver = __solver_dict[options.solver_key]
+    solverConstructionBuilding.updatePETScSolverCallbacks(solver, R, J)
+    solverConstructionBuilding.updatePETScSolverMethods(solver, options)
+    return solver, options
+
+
 def update_petsc_snes_callbacks(
     solver: PETScNonlinearSolver,
     R: Callable,
@@ -190,3 +153,8 @@ def update_petsc_snes_options(solver: PETScNonlinearSolver, options: SolverOptio
     return solver
 
 
+def destroy_petsc_solver(solver_key: int):
+    """Remove a solver from the dictionary and destroy its PETSc objects."""
+    solver = __solver_dict.pop(solver_key)
+    solver.destroy()
+    return solver
