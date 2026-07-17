@@ -8,6 +8,11 @@ import jax.numpy as jnp
 
 from ..options import *
 from ..conversions import *
+from .solver import *
+
+
+from petsc4py import PETSc
+
 
 
 _PETSC_KSP_TYPES = {
@@ -26,14 +31,20 @@ _PETSC_PC_TYPES = {
 
 # Stores a map from a key to the solver object, allowing reuse between nonlinear solve calls
 __solver_dict = {}
+__solver_idNum = 0
 
+
+def _new_solver_key():
+    global __solver_idNum
+    __solver_idNum += 1         #do not base on dict size alone, otherwise you'll get overwriting
+    return __solver_idNum
 
 def _coo_jacobian_function(R: Callable, J: Callable | None):
     """Return a function of x that produces COOData for the SNES Jacobian."""
     if J is None:
 
         def jacobian_coo_from_residual(x):
-            return convertJaxMatToCOOData(jax.jacfwd(R)(x))
+            return convert_jax_dense_mat_to_coo_data(jax.jacfwd(R)(x))
 
         return jacobian_coo_from_residual
 
@@ -41,7 +52,7 @@ def _coo_jacobian_function(R: Callable, J: Callable | None):
         jacobian = J(x)
         if all(hasattr(jacobian, field) for field in ("shape", "vals", "rows", "cols")):
             return jacobian
-        return convertJaxMatToCOOData(jnp.asarray(jacobian))
+        return convert_jax_dense_mat_to_coo_data(jnp.asarray(jacobian))
 
     return jacobian_coo
 
@@ -73,10 +84,9 @@ def build_petsc_snes_from_options(R: Callable, J: Callable | None, options: Solv
     provided it may return either COOData or a dense rank-2 JAX matrix. If `J`
     is `None`, a dense Jacobian is built with `jax.jacfwd(R)` for now.
     """
-    from petsc4py import PETSc
 
     if options.nonlinear_solver_type is not NonlinearSolverType.PETSC_SNES:
-        raise TypeError("buildPETScSolverFromOptions only builds PETSc SNES solvers")
+        raise TypeError("build_petsc_snes_from_options only builds PETSc SNES solvers")
 
     residual_callback = convert_jax_vec_func_to_petsc_vec_func(R)
     jacobian_callback = convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
@@ -108,20 +118,21 @@ def build_petsc_solver_with_reuse(
     the latest callbacks and method options.
     """
 
-    validate_solver_options(options)
+    validate_petsc_solver_options(options)
 
     if options.solver_key is None:
-        solver = solverConstructionBuilding.buildPETScSolverFromOptions(R, J, options)
+        solver = build_petsc_snes_from_options(R, J, options)
+        ksp_for_IFT = PETSc.KSP().create()    #TODO: Figure out a more elegant way of setting this up
         solver_key = _new_solver_key()
-        __solver_dict[solver_key] = solver
+        __solver_dict[solver_key] = (solver, ksp_for_IFT)   #this way we hide the KSP since we only need it for the KSP
         return solver, replace(options, solver_key=solver_key)
 
     if options.solver_key not in __solver_dict:
         raise KeyError(f"No PETSc solver found for solver_key={options.solver_key}")
 
-    solver = __solver_dict[options.solver_key]
-    solverConstructionBuilding.updatePETScSolverCallbacks(solver, R, J)
-    solverConstructionBuilding.updatePETScSolverMethods(solver, options)
+    solver = __solver_dict[options.solver_key][0]
+    update_petsc_snes_callbacks(solver, R, J)
+    update_petsc_snes_options(solver, options)
     return solver, options
 
 
@@ -156,5 +167,10 @@ def update_petsc_snes_options(solver: PETScNonlinearSolver, options: SolverOptio
 def destroy_petsc_solver(solver_key: int):
     """Remove a solver from the dictionary and destroy its PETSc objects."""
     solver = __solver_dict.pop(solver_key)
-    solver.destroy()
+    solver[0].destroy()
+    solver[1].destroy()  
     return solver
+
+    #careful with this, because it can let you overwriting existing solvers in it's current state. 
+    #If you have 2 solvers and pop number 1 the next id will be 2 which will overwrite
+    #it may be better to move to an increasing number system

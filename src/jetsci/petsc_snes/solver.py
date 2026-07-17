@@ -2,6 +2,9 @@ from dataclasses import dataclass
 
 from petsc4py import PETSc
 
+from ..conversions import *
+from ..options import *
+
 @dataclass
 class PETScNonlinearSolver:
     """Own the PETSc SNES object and its callback companion objects."""
@@ -25,7 +28,7 @@ class PETScNonlinearSolver:
     def _ensure_size(self, x0: jnp.ndarray):
         """Ensure the vector is the correct size"""
         if self.residual_vec.getSize() != x0.shape[0]:
-            self.residual_vec.setSizes((PETSc.DECIDE, x0.shape[0]))
+            self.residual_vec.setSizes((PETSc.DECIDE, x0.shape[0]))  #careful with this since we need to make sure that this is called when needed.
             self.residual_vec.setup()
 
 
@@ -34,10 +37,9 @@ class PETScNonlinearSolver:
 
         The caller owns the returned Vec and is responsible for destroying it.
         """
-        if self.residual_vec is None or self.jacobian_mat is None:
-            self.initialize_from_x0(x0)
+        self._ensure_size(self,x0)
 
-        x0_vec = jaxArrayToPETScVec(x0)
+        x0_vec = jax_array_to_petsc_vec(x0)
         x = x0_vec.duplicate()
         try:
             x0_vec.copy(x)
@@ -50,7 +52,7 @@ class PETScNonlinearSolver:
         """Solve and explicitly copy the PETSc Vec result into a JAX array."""
         x = self.solve(x0)
         try:
-            result = petscVecToJAX(x).copy()
+            result = petsc_vec_to_jax_array(x).copy()
             result.block_until_ready()
             return result
         finally:

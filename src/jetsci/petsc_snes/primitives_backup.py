@@ -61,9 +61,6 @@ def _dense_linear_solve_from_residual(residual: ResidualFunction) -> LinearSolve
 
     return linear_solve
 
-def _ksp_linear_solve_from_residual(residual: ResidualFunction, ksp_solver) -> LinearSolve:
-    ... #this is the version that uses the bundled KSP with the nonlinear solver
-
 
 def make_differentiable_snes_solve(primitive: DifferentiableSNESPrimitive):
     """Return `solve(phi, x0)` with an IFT custom JVP rule."""
