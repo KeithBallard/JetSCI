@@ -29,7 +29,9 @@ _PETSC_PC_TYPES = {
 }
 
 
-# Stores a map from a key to the solver object, allowing reuse between nonlinear solve calls
+# Stores a map from a key to the solver object, allowing reuse between nonlinear solve calls.
+# TODO: convert the tuple value to a small dataclass record once the SNES/IFT
+# ownership split settles down.
 __solver_dict = {}
 __solver_idNum = 0
 
