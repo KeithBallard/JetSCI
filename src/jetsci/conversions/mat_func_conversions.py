@@ -17,7 +17,7 @@ import jax
 import jax.numpy as jnp
 from petsc4py import PETSc
 
-from .direct_vec_function_converters import petscVecToJAX
+from .vec_func_conversions import petsc_vec_to_jax_array
 
 try:
     from cupyx.profiler import time_range as _cupy_time_range
@@ -53,7 +53,7 @@ def convert_jax_dense_mat_to_coo_data(dense_mat: jnp.ndarray) -> COOData:
     The production sparse path should prefer a JAX function that returns
     `COOData` directly, especially for large systems.
     """
-    mat = jnp.asarray(mat)
+    mat = jnp.asarray(dense_mat)
     if mat.ndim != 2:
         raise ValueError(f"Expected a rank-2 matrix, got shape {mat.shape}")
 
@@ -184,7 +184,7 @@ class PatternAwareMatAssignmentState:
 def evaluate_jax_dense_jac_to_coo(jax_mat_func, X):
     """Evaluate a dense JAX matrix function on PETSc Vec input as COOData."""
     with _nvtx_range("snes_petsc_vec_to_jax"):
-        x = petscVecToJAX(X)
+        x = petsc_vec_to_jax_array(X)
     with _nvtx_range("snes_jax_matrix_function"):
         dense_mat = jax_mat_func(x)
     with _nvtx_range("snes_dense_mat_to_coo_data"):
@@ -195,7 +195,7 @@ def evaluate_jax_dense_jac_to_coo(jax_mat_func, X):
 def evaluate_jax_coo_jac_to_coo(jax_coo_func, X):
     """Evaluate a JAX COOData-producing function on PETSc Vec input."""
     with _nvtx_range("snes_petsc_vec_to_jax"):
-        x = petscVecToJAX(X)
+        x = petsc_vec_to_jax_array(X)
     with _nvtx_range("snes_jax_coo_matrix_function"):
         data = jax_coo_func(x)
     return data

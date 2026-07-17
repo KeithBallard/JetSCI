@@ -18,18 +18,19 @@ class PETScNonlinearSolver:
 
     def __post_init__(self):
         """Setup snes and Mat/Vec."""
-
         self.residual_vec = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
         self.jacobian_mat = PETSc.Mat().create(comm=PETSc.COMM_WORLD)
+        self.jacobian_mat.setType('aijcusparse')
         self.snes.setFunction(self.residual_callback, self.residual_vec)
         self.snes.setJacobian(self.jacobian_callback, self.jacobian_mat, self.jacobian_mat)
 
 
     def _ensure_size(self, x0: jnp.ndarray):
         """Ensure the vector is the correct size"""
-        if self.residual_vec.getSize() != x0.shape[0]:
-            self.residual_vec.setSizes((PETSc.DECIDE, x0.shape[0]))  #careful with this since we need to make sure that this is called when needed.
-            self.residual_vec.setup()
+        if self.residual_vec.getType() is None:
+            self.residual_vec.setType("cuda")
+            self.residual_vec.setSizes((PETSc.DECIDE, x0.shape[0]))
+            self.residual_vec.setUp()
 
 
     def solve(self, x0: jnp.ndarray):
@@ -37,7 +38,7 @@ class PETScNonlinearSolver:
 
         The caller owns the returned Vec and is responsible for destroying it.
         """
-        self._ensure_size(self,x0)
+        self._ensure_size(x0)
 
         x0_vec = jax_array_to_petsc_vec(x0)
         x = x0_vec.duplicate()
