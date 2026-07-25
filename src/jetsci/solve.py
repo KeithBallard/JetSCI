@@ -21,6 +21,7 @@ def differentiable_solve(solver_options: SolverOptions, R: Callable, J_x: Option
         R_bar = jax.tree_util.Partial(R)
         J_bar = None if J_x is None else jax.tree_util.Partial(J_x)
 
+
     solver, solver_options = build_solver_with_reuse(
             solver_options,
             R_bar,

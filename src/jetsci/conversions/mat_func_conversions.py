@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import ctypes as ct
 from dataclasses import dataclass, field
+from time import perf_counter
 
 import cupy as cp
 import jax
@@ -25,6 +26,7 @@ except Exception:
     _cupy_time_range = None
 
 
+
 @contextmanager
 def _nvtx_range(name):
     if _cupy_time_range is None:
@@ -35,6 +37,7 @@ def _nvtx_range(name):
             yield
 
 
+@jax.tree_util.register_pytree_node_class
 @dataclass(frozen=True)
 class COOData:
     """JAX-visible COO matrix data."""
@@ -43,6 +46,14 @@ class COOData:
     vals: jax.Array
     rows: jax.Array
     cols: jax.Array
+
+    def tree_flatten(self):
+        return (self.shape, self.vals, self.rows, self.cols), None
+
+    @classmethod
+    def tree_unflatten(cls, aux_data, children):
+        del aux_data
+        return cls(*children)
 
 
 
@@ -187,6 +198,12 @@ def evaluate_jax_dense_jac_to_coo(jax_mat_func, X):
         x = petsc_vec_to_jax_array(X)
     with _nvtx_range("snes_jax_matrix_function"):
         dense_mat = jax_mat_func(x)
+    #print(
+    #    "jetsci.mat_callback: dense jacobian result shape/dtype",
+    #    getattr(dense_mat, "shape", None),
+    #    getattr(dense_mat, "dtype", None),
+    #)
+    #print("jetsci.mat_callback: dense jacobian result", dense_mat)
     with _nvtx_range("snes_dense_mat_to_coo_data"):
         data = convert_jax_dense_mat_to_coo_data(dense_mat)
     return data
@@ -198,6 +215,13 @@ def evaluate_jax_coo_jac_to_coo(jax_coo_func, X):
         x = petsc_vec_to_jax_array(X)
     with _nvtx_range("snes_jax_coo_matrix_function"):
         data = jax_coo_func(x)
+    #print(
+    #    "jetsci.mat_callback: COO jacobian result shape",
+    #    getattr(data, "shape", None),
+    #)
+    #print("jetsci.mat_callback: COO jacobian vals", getattr(data, "vals", None))
+    #print("jetsci.mat_callback: COO jacobian rows", getattr(data, "rows", None))
+    #print("jetsci.mat_callback: COO jacobian cols", getattr(data, "cols", None))
     return data
 
 
@@ -395,11 +419,13 @@ def convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
     *,
     mat_type=PETSc.Mat.Type.AIJCUSPARSE,
     state=None,
+    stats=None,
 ):
     """Convert a COOData function into a callback that rebuilds on pattern changes."""
     state = state if state is not None else PatternAwareMatAssignmentState()
 
     def petsc_matrix_function(snes, X, J, P, petsc_args=None):
+        callback_start = perf_counter()
         data = evaluate_jax_coo_jac_to_coo(jax_coo_func, X)
         assign_petsc_mat_pair_from_coo_pattern_aware(
             J,
@@ -408,6 +434,11 @@ def convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
             state=state,
             mat_type=mat_type,
         )
+        if stats is not None:
+            stats["jacobian_calls"] = stats.get("jacobian_calls", 0) + 1
+            stats["jacobian_total_s"] = stats.get("jacobian_total_s", 0.0) + (
+                perf_counter() - callback_start
+            )
         return None
 
     return petsc_matrix_function

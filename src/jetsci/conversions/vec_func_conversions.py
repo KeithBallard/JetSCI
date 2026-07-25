@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
+from time import perf_counter
+
 import jax
 from petsc4py import PETSc
 
@@ -45,8 +47,25 @@ def jax_array_to_petsc_vec(values):
     """Create a PETSc Vec that views a JAX array through DLPack."""
     import cupy as cp
 
-    values.block_until_ready()
-    values_cupy = cp.from_dlpack(values, copy=False)
+    if hasattr(values, "block_until_ready"):
+        values.block_until_ready()
+    if hasattr(values, "__dlpack_device__"):
+        try:
+            dlpack_device = values.__dlpack_device__()
+        except Exception:
+            dlpack_device = None
+        if dlpack_device is not None and dlpack_device[0] != 1:
+            values_cupy = cp.from_dlpack(values, copy=False)
+        else:
+            # TODO: remove this host-staging fallback once the traced RHS path is
+            # fully device-native again.
+            values_cupy = cp.asarray(np.asarray(values))
+    elif hasattr(values, "__dlpack__"):
+        values_cupy = cp.from_dlpack(values, copy=False)
+    else:
+        # TODO: remove this host-staging fallback once the traced RHS path is
+        # fully device-native again.
+        values_cupy = cp.asarray(np.asarray(values))
     return PETSc.Vec().createWithDLPack(values_cupy, size=values_cupy.size)
 
 
@@ -75,7 +94,7 @@ def assign_petsc_vec_from_jax(vec, values):
         vec_cupy[...] = values_cupy.reshape(vec_cupy.shape)
 
 
-def convert_jax_vec_func_to_petsc_vec_func(jax_func):
+def convert_jax_vec_func_to_petsc_vec_func(jax_func, *, stats=None):
     """Convert a state-only JAX vector function into a PETSc Vec callback.
 
     PETSc calls the returned function as `function(snes, X, F, args)`.
@@ -84,12 +103,20 @@ def convert_jax_vec_func_to_petsc_vec_func(jax_func):
     """
 
     def petsc_function(snes, X, F, petsc_args=None):
+        callback_start = perf_counter()
         with _nvtx_range("snes_petsc_vec_to_jax"):
             x = petsc_vec_to_jax_array(X)
         with _nvtx_range("snes_jax_vec_function"):
             values = jax_func(x)
+        #print("jetsci.vec_callback: residual result shape/dtype", getattr(values, "shape", None), getattr(values, "dtype", None))
+        #print("jetsci.vec_callback: residual result", values)
         with _nvtx_range("snes_assign_vec_direct_dlpack"):
             assign_petsc_vec_from_jax(F, values)
+        if stats is not None:
+            stats["residual_calls"] = stats.get("residual_calls", 0) + 1
+            stats["residual_total_s"] = stats.get("residual_total_s", 0.0) + (
+                perf_counter() - callback_start
+            )
         return None
 
     return petsc_function
