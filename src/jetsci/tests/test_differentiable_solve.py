@@ -31,7 +31,7 @@ def main():
     options = jetsci.SolverOptions(
         nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
         linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
-        linear_solve_type=jetsci.PETScLinearSolverType.CG,
+        linear_solve_type=jetsci.PETScLinearSolverType.LGMRES,
     )
 
     phi = jnp.array([4.0, 9.0, 16.0])
