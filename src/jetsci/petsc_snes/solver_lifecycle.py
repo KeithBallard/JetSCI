@@ -45,25 +45,42 @@ def _new_solver_key():
 
 def _coo_jacobian_function(R: Callable, J: Callable | None):
     """Return a function of x that produces COOData for the SNES Jacobian."""
+
+
+    #DEBUG PRINT
+    print("starting _coo_jacobian_function in lifecycle")
+
     if J is None:
+
+        #DEBUG PRINT
+        print("_coo_jacobian_function: no J, building J via jaxfwd of R")
 
         def jacobian_coo_from_residual(x):
             J = jax.jacfwd(R)(x)
-            print(J)
+            print(J)#we should probably ditch this
             return convert_jax_dense_mat_to_coo_data(J)
 
         return jacobian_coo_from_residual
 
     def jacobian_coo(x):
+
+        #DEBUG PRINT
+        print("calling jacobian_coo converted function")
+
         jacobian = J(x)
         if all(hasattr(jacobian, field) for field in ("shape", "vals", "rows", "cols")):
             return jacobian
         return convert_jax_dense_mat_to_coo_data(jnp.asarray(jacobian))
 
+    #DEBUG PRINT
+    print("completed _coo_jacobian_function conversion")
+
     return jacobian_coo
 
 
 def _apply_snes_options(snes, options: SolverOptions):
+    #DEBUG PRINT
+    print("calling solver_lifecycle _apply_snes_options")
     snes.setTolerances(
         rtol=options.nonlinear_relative_tol,
         atol=options.nonlinear_absolute_tol,
@@ -72,6 +89,8 @@ def _apply_snes_options(snes, options: SolverOptions):
 
 
 def _apply_ksp_options(snes, options: SolverOptions):
+    #DEBUG PRINT
+    print("calling solver_lifecycle _apply_ksp_options")
     ksp = snes.getKSP()
     ksp.setType(_PETSC_KSP_TYPES[options.linear_solve_type])
     ksp.setTolerances(
