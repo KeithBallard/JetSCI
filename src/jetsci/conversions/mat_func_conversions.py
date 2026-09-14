@@ -85,6 +85,11 @@ def convert_jax_dense_mat_to_coo_data(dense_mat: jnp.ndarray) -> COOData:
 
 def _mat_set_values_coo(mat, vals):
     """Sets the values for an existing PETSc Mat given values as a CuPy array"""
+    #DEBUG PRINT
+    print(f"_mat_set_values_coo: PETSc Mat handle = {int(mat.handle)}")
+    #DEBUG PRINT
+    print(f"_mat_set_values_coo: vals CuPy ptr = {vals.data.ptr}")
+
     lib = ct.CDLL(PETSc.__file__)
     mat_set_values_coo = lib.MatSetValuesCOO
     mat_set_values_coo.restype = ct.c_int
@@ -107,6 +112,11 @@ def __assign_petsc_mat_from_coo_data(
 ):
     """Assign JAX-visible COOData into a PETSc Mat without buffer_callback."""
     if set_preallocation:
+        #DEBUG PRINT
+        print(
+            "__assign_petsc_mat_from_coo_data: setting preallocation "
+            f"mat_handle={int(mat.handle)} shape={tuple(data.shape.tolist())}"
+        )
         with _nvtx_range("snes_direct_mat_set_sizes_type_preallocation"):
             mat.setSizes(tuple(data.shape.tolist()))
             if mat_type is not None:
@@ -116,6 +126,8 @@ def __assign_petsc_mat_from_coo_data(
     with _nvtx_range("snes_direct_mat_values_ready_and_dlpack"):
         data.vals.block_until_ready()
         vals_cupy = cp.from_dlpack(data.vals, copy=False)
+        #DEBUG PRINT
+        print(f"__assign_petsc_mat_from_coo_data: data.vals CuPy ptr = {vals_cupy.data.ptr}")
 
     with _nvtx_range("snes_direct_mat_set_values_coo"):
         _mat_set_values_coo(mat, vals_cupy)
@@ -155,8 +167,12 @@ class FixedPatternMatAssignmentState:
     def needs_preallocation(self, mat):
         handle = int(mat.handle)
         if handle in self.preallocated_handles:
+            #DEBUG PRINT
+            print(f"FixedPatternMatAssignmentState: reusing preallocation mat_handle={handle}")
             return False
         self.preallocated_handles.add(handle)
+        #DEBUG PRINT
+        print(f"FixedPatternMatAssignmentState: needs preallocation mat_handle={handle}")
         return True
 
 
@@ -178,6 +194,8 @@ class PatternAwareMatAssignmentState:
         current_pattern = (data.shape, data.rows, data.cols)
         if previous_pattern is None:
             self.patterns_by_handle[handle] = current_pattern
+            #DEBUG PRINT
+            print(f"PatternAwareMatAssignmentState: first preallocation mat_handle={handle}")
             return True
 
         previous_shape, previous_rows, previous_cols = previous_pattern
@@ -186,14 +204,24 @@ class PatternAwareMatAssignmentState:
         same_cols = self._same_device_array(previous_cols, data.cols)
         same_pattern = same_shape and same_rows and same_cols
         if same_pattern:
+            #DEBUG PRINT
+            print(f"PatternAwareMatAssignmentState: reusing preallocation mat_handle={handle}")
             return False
 
         self.patterns_by_handle[handle] = current_pattern
+        #DEBUG PRINT
+        print(f"PatternAwareMatAssignmentState: pattern changed mat_handle={handle}")
         return True
 
 
 def evaluate_jax_dense_jac_to_coo(jax_mat_func, X):
     """Evaluate a dense JAX matrix function on PETSc Vec input as COOData."""
+    #DEBUG PRINT
+    print("evaluate_jax_dense_jac_to_coo: PETSc matrix callback evaluating dense Jacobian")
+    #DEBUG PRINT
+    if hasattr(X, "getCUDAHandle"):
+        print(f"evaluate_jax_dense_jac_to_coo: X CUDA handle = {X.getCUDAHandle()}")
+
     with _nvtx_range("snes_petsc_vec_to_jax"):
         x = petsc_vec_to_jax_array(X)
     with _nvtx_range("snes_jax_matrix_function"):
@@ -211,6 +239,12 @@ def evaluate_jax_dense_jac_to_coo(jax_mat_func, X):
 
 def evaluate_jax_coo_jac_to_coo(jax_coo_func, X):
     """Evaluate a JAX COOData-producing function on PETSc Vec input."""
+    #DEBUG PRINT
+    print("evaluate_jax_coo_jac_to_coo: PETSc matrix callback evaluating COO Jacobian")
+    #DEBUG PRINT
+    if hasattr(X, "getCUDAHandle"):
+        print(f"evaluate_jax_coo_jac_to_coo: X CUDA handle = {X.getCUDAHandle()}")
+
     with _nvtx_range("snes_petsc_vec_to_jax"):
         x = petsc_vec_to_jax_array(X)
     with _nvtx_range("snes_jax_coo_matrix_function"):
@@ -235,6 +269,12 @@ def assign_petsc_mat_pair_from_coo(
     mat_type=PETSc.Mat.Type.AIJCUSPARSE,
 ):
     """Assign COOData into SNES Jacobian/preconditioner Mat objects."""
+    #DEBUG PRINT
+    print(
+        "assign_petsc_mat_pair_from_coo: assigning matrix pair "
+        f"J_handle={int(J.handle)} P_handle={int(P.handle) if P is not None else None}"
+    )
+
     with _nvtx_range("snes_assign_jacobian_mat_direct"):
         __assign_petsc_mat_from_coo_data(
             J,
@@ -425,6 +465,17 @@ def convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
     state = state if state is not None else PatternAwareMatAssignmentState()
 
     def petsc_matrix_function(snes, X, J, P, petsc_args=None):
+        #DEBUG PRINT
+        print("convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware: PETSc matrix callback called")
+        #DEBUG PRINT
+        if hasattr(X, "getCUDAHandle"):
+            print(f"convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware: X CUDA handle = {X.getCUDAHandle()}")
+        #DEBUG PRINT
+        print(
+            "convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware: "
+            f"J_handle={int(J.handle)} P_handle={int(P.handle) if P is not None else None}"
+        )
+
         callback_start = perf_counter()
         data = evaluate_jax_coo_jac_to_coo(jax_coo_func, X)
         assign_petsc_mat_pair_from_coo_pattern_aware(

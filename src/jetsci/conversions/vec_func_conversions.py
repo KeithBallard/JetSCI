@@ -33,10 +33,16 @@ def _nvtx_range(name):
 
 def petsc_vec_to_jax_array(vec):
     """Create a JAX array view of a PETSc Vec through DLPack."""
+    #DEBUG PRINT
+    if hasattr(vec, "getCUDAHandle"):
+        print(f"petsc_vec_to_jax_array: PETSc Vec CUDA handle = {vec.getCUDAHandle()}")
+
     if hasattr(vec, "toDLPack"):
         import cupy as cp
 
         vec_cupy = cp.from_dlpack(vec.toDLPack(mode="r"))
+        #DEBUG PRINT
+        print(f"petsc_vec_to_jax_array: CuPy view ptr = {vec_cupy.data.ptr}")
         return jax.dlpack.from_dlpack(vec_cupy)
     if not hasattr(vec, "__dlpack__"):
         raise TypeError("PETSc Vec does not expose DLPack; direct input path is unavailable")
@@ -47,6 +53,12 @@ def jax_array_to_petsc_vec(values):
     """Create a PETSc Vec that views a JAX array through DLPack."""
     import cupy as cp
 
+    #DEBUG PRINT
+    print(
+        "jax_array_to_petsc_vec: converting values "
+        f"shape={getattr(values, 'shape', None)} dtype={getattr(values, 'dtype', None)}"
+    )
+
     if hasattr(values, "block_until_ready"):
         values.block_until_ready()
     if hasattr(values, "__dlpack_device__"):
@@ -56,17 +68,29 @@ def jax_array_to_petsc_vec(values):
             dlpack_device = None
         if dlpack_device is not None and dlpack_device[0] != 1:
             values_cupy = cp.from_dlpack(values, copy=False)
+            #DEBUG PRINT
+            print(f"jax_array_to_petsc_vec: CuPy view ptr = {values_cupy.data.ptr}")
         else:
             # TODO: remove this host-staging fallback once the traced RHS path is
             # fully device-native again.
             values_cupy = cp.asarray(np.asarray(values))
+            #DEBUG PRINT
+            print(f"jax_array_to_petsc_vec: host-staged CuPy ptr = {values_cupy.data.ptr}")
     elif hasattr(values, "__dlpack__"):
         values_cupy = cp.from_dlpack(values, copy=False)
+        #DEBUG PRINT
+        print(f"jax_array_to_petsc_vec: CuPy view ptr = {values_cupy.data.ptr}")
     else:
         # TODO: remove this host-staging fallback once the traced RHS path is
         # fully device-native again.
         values_cupy = cp.asarray(np.asarray(values))
-    return PETSc.Vec().createWithDLPack(values_cupy, size=values_cupy.size)
+        #DEBUG PRINT
+        print(f"jax_array_to_petsc_vec: host-staged CuPy ptr = {values_cupy.data.ptr}")
+    vec = PETSc.Vec().createWithDLPack(values_cupy, size=values_cupy.size)
+    #DEBUG PRINT
+    if hasattr(vec, "getCUDAHandle"):
+        print(f"jax_array_to_petsc_vec: created PETSc Vec CUDA handle = {vec.getCUDAHandle()}")
+    return vec
 
 
 def assign_petsc_vec_from_jax(vec, values):
@@ -81,9 +105,13 @@ def assign_petsc_vec_from_jax(vec, values):
     with _nvtx_range("snes_direct_vec_values_ready_and_dlpack"):
         values.block_until_ready()
         values_cupy = cp.from_dlpack(values, copy=False)
+        #DEBUG PRINT
+        print(f"assign_petsc_vec_from_jax: values CuPy ptr = {values_cupy.data.ptr}")
 
     with _nvtx_range("snes_direct_vec_assign_to_petsc"):
         ptr = vec.getCUDAHandle()
+        #DEBUG PRINT
+        print(f"assign_petsc_vec_from_jax: target PETSc Vec CUDA handle = {ptr}")
         length = vec.getSize()
         nbytes = length * values_cupy.dtype.itemsize
         vec_cupy = cp.ndarray(
@@ -103,6 +131,15 @@ def convert_jax_vec_func_to_petsc_vec_func(jax_func, *, stats=None):
     """
 
     def petsc_function(snes, X, F, petsc_args=None):
+        #DEBUG PRINT
+        print("convert_jax_vec_func_to_petsc_vec_func: PETSc residual callback called")
+        #DEBUG PRINT
+        if hasattr(X, "getCUDAHandle"):
+            print(f"convert_jax_vec_func_to_petsc_vec_func: X CUDA handle = {X.getCUDAHandle()}")
+        #DEBUG PRINT
+        if hasattr(F, "getCUDAHandle"):
+            print(f"convert_jax_vec_func_to_petsc_vec_func: F CUDA handle = {F.getCUDAHandle()}")
+
         callback_start = perf_counter()
         with _nvtx_range("snes_petsc_vec_to_jax"):
             x = petsc_vec_to_jax_array(X)
