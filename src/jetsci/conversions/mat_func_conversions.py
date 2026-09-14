@@ -83,6 +83,27 @@ def convert_jax_dense_mat_to_coo_data(dense_mat: jnp.ndarray) -> COOData:
     )
 
 
+def convert_jax_sparse_coo_to_coo_data(sparse_mat) -> COOData:
+    """Convert a JAX sparse COO matrix into the callback COOData convention."""
+    return COOData(
+        shape=jnp.asarray(sparse_mat.shape, dtype=jnp.int64),
+        vals=sparse_mat.data,
+        rows=jnp.asarray(sparse_mat.row, dtype=jnp.int32),
+        cols=jnp.asarray(sparse_mat.col, dtype=jnp.int32),
+    )
+
+
+def convert_jax_mat_to_coo_data(mat) -> COOData:
+    """Accept COOData, JAX sparse COO, or dense rank-2 arrays as COOData."""
+    if isinstance(mat, COOData):
+        return mat
+    if all(hasattr(mat, field) for field in ("shape", "vals", "rows", "cols")):
+        return mat
+    if all(hasattr(mat, field) for field in ("shape", "data", "row", "col")):
+        return convert_jax_sparse_coo_to_coo_data(mat)
+    return convert_jax_dense_mat_to_coo_data(jnp.asarray(mat))
+
+
 def _mat_set_values_coo(mat, vals):
     """Sets the values for an existing PETSc Mat given values as a CuPy array"""
     #DEBUG PRINT

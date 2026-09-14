@@ -36,7 +36,7 @@ from jax.experimental.buffer_callback import buffer_callback
 
 from petsc4py import PETSc
 
-from solver_lifecycle import *
+from .solver_lifecycle import *
 
 try:
     from jax.extend import core as jax_core
@@ -349,6 +349,11 @@ def _register_primitive_context(primitive: "DifferentiableSNESPrimitive") -> Non
     _PRIMITIVE_CONTEXTS[primitive.solver_key] = primitive
 
 
+def unregister_primitive_context(solver_key: int) -> None:
+    """Remove a registered primitive context when its PETSc solver is destroyed."""
+    _PRIMITIVE_CONTEXTS.pop(solver_key, None)
+
+
 def _differentiable_snes_solve_impl(phi, x0, *, solver_key: int):
     #DEBUG PRINT
     print(f"differentiable_snes _differentiable_snes_solve_impl called solver_key={solver_key}")
@@ -554,4 +559,5 @@ __all__ = [
     "TransposeLinearSolve",
     "make_differentiable_snes_solve",
     "set_jvp_diagnostics",
+    "unregister_primitive_context",
 ]

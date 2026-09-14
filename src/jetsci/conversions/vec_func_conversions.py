@@ -12,9 +12,8 @@ from contextlib import contextmanager
 
 from time import perf_counter
 
-import numpy as np
-
 import jax
+import numpy as np
 from petsc4py import PETSc
 
 try:
