@@ -36,7 +36,7 @@ from jax.experimental.buffer_callback import buffer_callback
 
 from petsc4py import PETSc
 
-from solver_lifecycle import *
+from .solver_lifecycle import *
 
 try:
     from jax.extend import core as jax_core

@@ -216,8 +216,27 @@ class PETScNonlinearSolver:
         finally:
             x.destroy()
 
-    def linear_solve(self, x0):
-        pass
+    def linear_solve(
+        self,
+        rhs: jnp.ndarray,
+        x_star: jnp.ndarray | None = None,
+        transpose: bool = False,
+    ) -> jnp.ndarray:
+        """Perform linear solve J(x*) dx = rhs (or J(x*)^T lam = rhs) for IFT differentiation."""
+        ksp = self.snes.getKSP()
+        rhs_vec = jax_array_to_petsc_vec(rhs)
+        out_vec = rhs_vec.duplicate()
+        try:
+            if transpose:
+                ksp.solveTranspose(rhs_vec, out_vec)
+            else:
+                ksp.solve(rhs_vec, out_vec)
+            result = petsc_vec_to_jax_array(out_vec).copy()
+            result.block_until_ready()
+            return result
+        finally:
+            rhs_vec.destroy()
+            out_vec.destroy()
 
     def cleanup_work_vectors(self):
         """Destroy residual/Jacobian objects that depend on vector size."""

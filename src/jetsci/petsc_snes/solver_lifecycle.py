@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from typing import Callable
+import warnings
 
 import jax
 import jax.numpy as jnp
+import jax.experimental.sparse as jsparse
 
 from ..options import *
 from ..conversions import *
@@ -46,11 +48,18 @@ def _new_solver_key():
 def _coo_jacobian_function(R: Callable, J: Callable | None):
     """Return a function of x that produces COOData for the SNES Jacobian."""
     if J is None:
+        warnings.warn(
+            "No Jacobian function J(x) was provided to PETSc SNES. "
+            "A dense Jacobian will be materialized via jax.jacfwd(R)(x) and converted to COO data on every step. "
+            "This severely degrades performance on large problems. "
+            "Fix: Provide an explicit Jacobian function J(x) returning COOData or a sparse matrix.",
+            UserWarning,
+            stacklevel=2,
+        )
 
         def jacobian_coo_from_residual(x):
-            J = jax.jacfwd(R)(x)
-            print(J)
-            return convert_jax_dense_mat_to_coo_data(J)
+            J_dense = jax.jacfwd(R)(x)
+            return convert_jax_dense_mat_to_coo_data(J_dense)
 
         return jacobian_coo_from_residual
 
@@ -58,6 +67,20 @@ def _coo_jacobian_function(R: Callable, J: Callable | None):
         jacobian = J(x)
         if all(hasattr(jacobian, field) for field in ("shape", "vals", "rows", "cols")):
             return jacobian
+        if isinstance(jacobian, jsparse.COO) or (hasattr(jacobian, "data") and hasattr(jacobian, "row") and hasattr(jacobian, "col")):
+            return COOData(
+                shape=jnp.asarray(jacobian.shape, dtype=jnp.int64),
+                vals=jacobian.data,
+                rows=jnp.asarray(jacobian.row, dtype=jnp.int32),
+                cols=jnp.asarray(jacobian.col, dtype=jnp.int32),
+            )
+        warnings.warn(
+            "Jacobian function returned a dense array instead of COOData for PETSc SNES. "
+            "Converting dense matrix to COO format on every evaluation. "
+            "Fix: Have J(x) return COOData or a sparse matrix representation to avoid conversion overhead.",
+            UserWarning,
+            stacklevel=2,
+        )
         return convert_jax_dense_mat_to_coo_data(jnp.asarray(jacobian))
 
     return jacobian_coo
@@ -142,12 +165,11 @@ def build_petsc_solver_with_reuse(
         if options.solver_key not in __solver_dict:
             raise KeyError(f"No PETSc solver found for solver_key={options.solver_key}")
 
+        solver = __solver_dict[options.solver_key][0]
         update_petsc_snes_callbacks(solver, R, J)
         update_petsc_snes_options(solver, options)
 
-    solver = __solver_dict[options.solver_key][0]
-
-    return solver, options
+        return solver, options
 
 
 def update_petsc_snes_callbacks(
