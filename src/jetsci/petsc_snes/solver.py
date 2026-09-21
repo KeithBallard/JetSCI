@@ -21,6 +21,8 @@ class PETScLinearSolver:
     matrix_data: object | None = None
     operator_matrix: object | None = None
 
+    working_vector: object | None = None
+
 
     def __post_init__(self):
         """Setup the KSP work objects."""
@@ -28,6 +30,7 @@ class PETScLinearSolver:
         print("PETScLinearSolver __post_init__ called")
         
         self.vector_data = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+        self.working_vector = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
         self.matrix_data = PETSc.Mat().create(comm=PETSc.COMM_WORLD)
         self.matrix_data.setType('aijcusparse')
         self.operator_matrix = self.matrix_data
@@ -42,6 +45,10 @@ class PETScLinearSolver:
             self.vector_data.setType("cuda")
             self.vector_data.setSizes((PETSc.DECIDE, x0.shape[0]))
             self.vector_data.setUp()
+        if self.working_vector.getType() is None:
+            self.working_vector.setType("cuda")
+            self.working_vector.setSizes((PETSc.DECIDE, x0.shape[0]))
+            self.working_vector.setUp()
         if self.matrix_data.getType() is None:
             self.matrix_data.setSizes((x0.shape[0], x0.shape[0]))
             self.matrix_data.setUp()
@@ -86,17 +93,11 @@ class PETScLinearSolver:
         #DEBUG PRINT
         print("PETScLinearSolver linear_solve: finished converting jax rhs to rhsVec")
 
-        #DEBUG PRINT
-        print("PETScLinearSolver linear_solve: duplicating rhsVec into x")
-        x = rhs_vec.duplicate()
-
-        #DEBUG PRINT
-        print("PETScLinearSolver linear_solve: finished duplicating rhsVec into x")
 
         try:
             #DEBUG PRINT
             print("PETScLinearSolver linear_solve: copying x into rhsVec")
-            rhs_vec.copy(x)
+            rhs_vec.copy(self.working_vector)
 
             #DEBUG PRINT
             print("PETScLinearSolver linear_solve: finished copying x into rhsVec")
@@ -105,7 +106,7 @@ class PETScLinearSolver:
             #DEBUG PRINT
             print("PETScLinearSolver linear_solve: calling self.ksp.solve")
 
-            self.ksp.solve(rhs_vec, x)
+            self.ksp.solve(rhs_vec, self.working_vector)
 
             #DEBUG PRINT
             print("PETScLinearSolver linear_solve: finished self.ksp.solve") 
@@ -114,7 +115,7 @@ class PETScLinearSolver:
             #DEBUG PRINT
             print("PETScLinearSolver linear_solve complete")
 
-            return x
+            return self.working_vector
         finally:
             rhs_vec.destroy()
 
@@ -144,15 +145,15 @@ class PETScLinearSolver:
         self._ensure_size(rhs)
 
         rhs_vec = jax_array_to_petsc_vec(rhs)
-        x = rhs_vec.duplicate()
+
         try:
-            rhs_vec.copy(x)
-            self.ksp.solveTranspose(rhs_vec, x)
+            rhs_vec.copy(self.working_vector)
+            self.ksp.solveTranspose(rhs_vec, self.working_vector)
 
             #DEBUG PRINT
             print("PETScLinearSolver block_linear_solve complete")
 
-            return x
+            return self.working_vector
 
         
         finally:
@@ -189,7 +190,7 @@ class PETScLinearSolver:
 
             return result
         finally:
-            x.destroy()
+            pass
 
     def solve_transpose_to_jax(self, rhs):
         """Solve transpose and explicitly copy the PETSc Vec result into a JAX array."""
@@ -210,13 +211,16 @@ class PETScLinearSolver:
 
             return result
         finally:
-            x.destroy()
+            pass
 
     def cleanup_work_vectors(self):
         """Destroy work objects that depend on vector size."""
         if self.vector_data is not None:
             self.vector_data.destroy()
             self.vector_data = None
+        if self.working_vector is not None:
+            self.working_vector.destroy()
+            self.working_vector = None
         if self.matrix_data is not None:
             self.matrix_data.destroy()
             self.matrix_data = None
@@ -256,6 +260,7 @@ class PETScNonlinearSolver:
         print("PETScNonlinearSolver __post_init__ called")
 
         self.residual_vec = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+        self.workingVector = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
         self.jacobian_mat = PETSc.Mat().create(comm=PETSc.COMM_WORLD)
         self.jacobian_mat.setType('aijcusparse')
         self.snes.setFunction(self.residual_callback, self.residual_vec)
@@ -272,6 +277,10 @@ class PETScNonlinearSolver:
             self.residual_vec.setSizes((PETSc.DECIDE, x0.shape[0]))
             self.residual_vec.setUp()
 
+        if self.workingVector.getType() is None:
+            self.workingVector.setType("cuda")
+            self.workingVector.setSizes((PETSc.DECIDE, x0.shape[0]))
+            self.workingVector.setUp()
 
     def solve(self, x0: jnp.ndarray):
         """Solve with this SNES object and return a PETSc Vec.
@@ -296,12 +305,6 @@ class PETScNonlinearSolver:
         
         conversion_time = perf_counter() - conversion_start
 
-        #DEBUG PRINT
-        print("PETScNonlinearSolver solve: duplicating x0 petscVec to x")
-        x = x0_vec.duplicate()
-
-        #DEBUG PRINT
-        print("PETScNonlinearSolver solve: finished duplicating x0 petscVec into x")    
 
 
         try:
@@ -309,12 +312,12 @@ class PETScNonlinearSolver:
 
            
             #DEBUG PRINT
-            print("PETScNonlinearSolver solve: copying x into x0 petscVec")    
-            x0_vec.copy(x)
+            print("PETScNonlinearSolver solve: copying x0 into workingVector petscVec")    
+            x0_vec.copy(self.workingVector)
 
             
             #DEBUG PRINT
-            print("PETScNonlinearSolver solve: finished copying x into x0 petscVec")    
+            print("PETScNonlinearSolver solve: finished copying x0 into workingVector petscVec")    
 
 
             copy_time = perf_counter() - copy_start
@@ -322,7 +325,7 @@ class PETScNonlinearSolver:
 
             #DEBUG PRINT
             print("PETScNonlinearSolver solve: calling self.snes.solve")  
-            self.snes.solve(None, x)
+            self.snes.solve(None, self.workingVector)
 
             #DEBUG PRINT
             print("PETScNonlinearSolver solve: finished calling self.snes.solve")  
@@ -345,9 +348,9 @@ class PETScNonlinearSolver:
 
             if self.diagnostics:
                 print("PETSc SNES diagnostics:", self.last_diagnostics)
-            return x
+            return self.workingVector
         finally:
-            x0_vec.destroy()
+            x0_vec.destroy()  #I wonder, can we just keep using x0_vec and updating it?
 
     def solve_to_jax(self, x0):
         """Solve and explicitly copy the PETSc Vec result into a JAX array."""
