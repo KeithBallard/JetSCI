@@ -9,24 +9,11 @@ linear solve path.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-PRIMITIVE_PATH = REPO_ROOT / "jetsci" / "petsc_snes" / "primitives.py"
-
-spec = importlib.util.spec_from_file_location("jetsci_petsc_snes_primitives", PRIMITIVE_PATH)
-if spec is None or spec.loader is None:
-    raise RuntimeError(f"Could not load primitive module from {PRIMITIVE_PATH}")
-primitive_mod = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = primitive_mod
-spec.loader.exec_module(primitive_mod)
+from jetsci.petsc_snes import primitives as primitive_mod
 
 
 jax.config.update("jax_enable_x64", True)
