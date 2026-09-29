@@ -114,16 +114,17 @@ def differentiable_solve(
 
 
 def differentiable_linear_solve(
+    solver_options: SolverOptions,
     A: Any,
     b: jnp.ndarray,
-    solver_options: SolverOptions,
-    transpose: bool = False,
+    transpose: bool = False
 ) -> tuple[jnp.ndarray, LinearSolverResultInfo]:
     """Direct linear solve interface compatible with autodiff."""
     if solver_options is None:
-        raise ValueError(
-            "solver_options is required for differentiable_linear_solve. "
-            "Pass an explicit SolverOptions instance with linear_solve_type set. "
-            "Example: SolverOptions(nonlinear_solver_type=..., linear_solve_type=...)"
-        )
+            raise ValueError(
+                "solver_options is required for differentiable_linear_solve. "
+                "Pass an explicit SolverOptions instance with linear_solve_type set. "
+                "Example: SolverOptions(nonlinear_solver_type=..., linear_solve_type=...)"
+            )
     return linear_solve(A, b, solver_options=solver_options, transpose=transpose)
+    
