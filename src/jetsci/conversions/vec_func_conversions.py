@@ -37,7 +37,10 @@ def petsc_vec_to_jax_array(vec):
     """Create a JAX array view of a PETSc Vec through DLPack."""
     #DEBUG PRINT
     if hasattr(vec, "getCUDAHandle"):
-        print(f"petsc_vec_to_jax_array: PETSc Vec CUDA handle = {vec.getCUDAHandle()}")
+        try:
+            print(f"petsc_vec_to_jax_array: PETSc Vec CUDA handle = {vec.getCUDAHandle('r')}")
+        except Exception:
+            pass
 
     if hasattr(vec, "toDLPack"):
         import cupy as cp
@@ -137,10 +140,16 @@ def convert_jax_vec_func_to_petsc_vec_func(jax_func, *, stats=None):
         print("convert_jax_vec_func_to_petsc_vec_func: PETSc residual callback called")
         #DEBUG PRINT
         if hasattr(X, "getCUDAHandle"):
-            print(f"convert_jax_vec_func_to_petsc_vec_func: X CUDA handle = {X.getCUDAHandle()}")
+            try:
+                print(f"convert_jax_vec_func_to_petsc_vec_func: X CUDA handle = {X.getCUDAHandle('r')}")
+            except Exception:
+                pass
         #DEBUG PRINT
         if hasattr(F, "getCUDAHandle"):
-            print(f"convert_jax_vec_func_to_petsc_vec_func: F CUDA handle = {F.getCUDAHandle()}")
+            try:
+                print(f"convert_jax_vec_func_to_petsc_vec_func: F CUDA handle = {F.getCUDAHandle()}")
+            except Exception:
+                pass
 
         callback_start = perf_counter()
         with _nvtx_range("snes_petsc_vec_to_jax"):

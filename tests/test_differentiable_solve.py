@@ -30,8 +30,8 @@ def main():
 
     options = jetsci.SolverOptions(
         nonlinear_solver_type=jetsci.NonlinearSolverType.PETSC_SNES,
-        linear_precond_type=jetsci.PETScPreconditionerType.JACOBI,
-        linear_solve_type=jetsci.PETScLinearSolverType.LGMRES,
+        linear_solver_type=jetsci.LinearSolverType.PETSC_LGMRES,
+        linear_preconditioner_type=jetsci.PreconditionerType.PETSC_JACOBI,
     )
 
     phi = jnp.array([4.0, 9.0, 16.0])
@@ -57,6 +57,11 @@ def main():
     x_expected = jnp.linalg.solve(J_x_expected, phi)
     print("Expected x:", x_expected)
     print(f"Residual (x): {residual(phi, x_expected)}")
+    assert jnp.allclose(sol, x_expected, atol=1e-5)
+
+
+def test_petsc_differentiable_solve():
+    main()
 
 
 if __name__ == "__main__":

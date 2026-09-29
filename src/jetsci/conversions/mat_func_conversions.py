@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 
 import cupy as cp
+import numpy as np
 import jax
 import jax.numpy as jnp
 from petsc4py import PETSc
@@ -145,8 +146,12 @@ def __assign_petsc_mat_from_coo_data(
             mat.setPreallocationCOO(data.rows, data.cols)
 
     with _nvtx_range("snes_direct_mat_values_ready_and_dlpack"):
-        data.vals.block_until_ready()
-        vals_cupy = cp.from_dlpack(data.vals, copy=False)
+        if hasattr(data.vals, "block_until_ready"):
+            data.vals.block_until_ready()
+        try:
+            vals_cupy = cp.from_dlpack(data.vals, copy=False)
+        except (TypeError, ValueError):
+            vals_cupy = cp.asarray(np.asarray(data.vals))
         #DEBUG PRINT
         print(f"__assign_petsc_mat_from_coo_data: data.vals CuPy ptr = {vals_cupy.data.ptr}")
 
@@ -241,7 +246,10 @@ def evaluate_jax_dense_jac_to_coo(jax_mat_func, X):
     print("evaluate_jax_dense_jac_to_coo: PETSc matrix callback evaluating dense Jacobian")
     #DEBUG PRINT
     if hasattr(X, "getCUDAHandle"):
-        print(f"evaluate_jax_dense_jac_to_coo: X CUDA handle = {X.getCUDAHandle()}")
+        try:
+            print(f"evaluate_jax_dense_jac_to_coo: X CUDA handle = {X.getCUDAHandle('r')}")
+        except Exception:
+            pass
 
     with _nvtx_range("snes_petsc_vec_to_jax"):
         x = petsc_vec_to_jax_array(X)
@@ -264,7 +272,10 @@ def evaluate_jax_coo_jac_to_coo(jax_coo_func, X):
     print("evaluate_jax_coo_jac_to_coo: PETSc matrix callback evaluating COO Jacobian")
     #DEBUG PRINT
     if hasattr(X, "getCUDAHandle"):
-        print(f"evaluate_jax_coo_jac_to_coo: X CUDA handle = {X.getCUDAHandle()}")
+        try:
+            print(f"evaluate_jax_coo_jac_to_coo: X CUDA handle = {X.getCUDAHandle('r')}")
+        except Exception:
+            pass
 
     with _nvtx_range("snes_petsc_vec_to_jax"):
         x = petsc_vec_to_jax_array(X)
@@ -490,7 +501,10 @@ def convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware(
         print("convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware: PETSc matrix callback called")
         #DEBUG PRINT
         if hasattr(X, "getCUDAHandle"):
-            print(f"convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware: X CUDA handle = {X.getCUDAHandle()}")
+            try:
+                print(f"convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware: X CUDA handle = {X.getCUDAHandle('r')}")
+            except Exception:
+                pass
         #DEBUG PRINT
         print(
             "convert_jax_coo_mat_func_to_petsc_mat_func_pattern_aware: "

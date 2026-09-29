@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from typing import Callable, Optional, Any
+import numpy as np
 import jax
 import jax.numpy as jnp
 import jax.experimental.sparse as jsparse
 
 from .options import (
+    LinearSolverOptions,
     SolverOptions,
     NonlinearSolverType,
-    JAXLinearSolverType,
-    PETScLinearSolverType,
+    LinearSolverType,
+    PreconditionerType,
 )
-from .lifecycle import build_solver_with_reuse
+from .lifecycle import build_solver_with_reuse, build_linear_solver_with_reuse, __linear_solver_dict
+from .conversions import COOData
 from .jax_linear import linear_solve, LinearSolverResultInfo
 
 
@@ -81,12 +84,12 @@ def differentiable_solve(
             return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
 
         is_symmetric = (
-            solver_options.linear_solve_type in (
-                JAXLinearSolverType.CG_JAX_SCIPY,
-                JAXLinearSolverType.CG_JAX_SCIPY_W_INFO,
-                JAXLinearSolverType.CG_JAXOPT,
-                JAXLinearSolverType.CHOLESKY_JAXOPT,
-                PETScLinearSolverType.CG,
+            solver_options.linear_solver_type in (
+                LinearSolverType.JAX_CG_SCIPY,
+                LinearSolverType.JAX_CG_SCIPY_W_INFO,
+                LinearSolverType.JAX_CG_JAXOPT,
+                LinearSolverType.JAX_CHOLESKY_JAXOPT,
+                LinearSolverType.PETSC_CG,
             )
         )
 

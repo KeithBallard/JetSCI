@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import jax.experimental.sparse as jsparse
 import jax.lax as lax
 
-from ..options import JAXLinearSolverType, JAXPreconditionerType, SolverOptions
+from ..options import LinearSolverType, PreconditionerType, LinearSolverOptions, SolverOptions
 from .solve_cg import cg_w_info
 from .preconditioners import build_preconditioner
 
@@ -282,12 +282,26 @@ def _cupy_splu_from_dense(A_dense, b, transpose: bool):
     return lu_scipy.solve(np.asarray(b), trans="T" if transpose else "N")
 
 
+def _get_operator_shape(A: Any) -> tuple[int, int] | None:
+    if hasattr(A, "shape"):
+        return (int(A.shape[0]), int(A.shape[1]))
+    return None
+
+
+def _get_operator_sparsity_pattern(A: Any) -> Any:
+    if hasattr(A, "rows") and hasattr(A, "cols"):
+        return (np.asarray(A.rows), np.asarray(A.cols))
+    elif isinstance(A, jsparse.COO):
+        return (np.asarray(A.row), np.asarray(A.col))
+    return None
+
+
 def linear_solve(
     A: Any,
     b: jnp.ndarray,
-    solver_options: SolverOptions | None = None,
-    solver_type: JAXLinearSolverType | None = None,
-    precond_type: JAXPreconditionerType | None = None,
+    solver_options: LinearSolverOptions | None = None,
+    solver_type: LinearSolverType | None = None,
+    precond_type: PreconditionerType | None = None,
     preconditioner: Callable[[jnp.ndarray], jnp.ndarray] | None = None,
     x0: jnp.ndarray | None = None,
     transpose: bool = False,
@@ -298,25 +312,27 @@ def linear_solve(
         x0 = jnp.zeros_like(b)
 
     if solver_type is None:
-        if solver_options is not None and isinstance(solver_options.linear_solve_type, JAXLinearSolverType):
-            solver_type = solver_options.linear_solve_type
-        elif solver_options is not None and hasattr(solver_options, "linear_solve_type"):
-            raise TypeError(
-                f"Expected JAXLinearSolverType for JAX linear_solve, but solver_options has "
-                f"linear_solve_type={solver_options.linear_solve_type!r}. "
-                "Fix: Specify a JAXLinearSolverType (e.g., JAXLinearSolverType.CG_JAX_SCIPY)."
-            )
+        if solver_options is not None and isinstance(solver_options.linear_solver_type, LinearSolverType):
+            solver_type = solver_options.linear_solver_type
         else:
             raise ValueError(
                 "No linear solver type specified in `linear_solve`. "
-                "You must explicitly provide `solver_type` (e.g., `solver_type=JAXLinearSolverType.CG_JAX_SCIPY`) "
-                "or pass `solver_options=SolverOptions(...)` with `linear_solve_type` set. "
+                "You must explicitly provide `solver_type` (e.g., `solver_type=LinearSolverType.JAX_CG_SCIPY`) "
+                "or pass `solver_options=LinearSolverOptions(...)` with `linear_solver_type` set. "
                 "Silently defaulting to a dense solver has been disabled to prevent hidden performance degradation."
             )
 
+    if not solver_type.is_jax:
+        raise TypeError(
+            f"Expected a JAX LinearSolverType for JAX linear_solve, but got "
+            f"solver_type={solver_type.name!r} (PETSc backend). "
+            "Fix: Specify a JAX linear solver type (e.g., LinearSolverType.JAX_CG_SCIPY) "
+            "or use differentiable_linear_solve with PETSc options."
+        )
+
     if precond_type is None and solver_options is not None:
-        if isinstance(solver_options.linear_precond_type, JAXPreconditionerType):
-            precond_type = solver_options.linear_precond_type
+        if isinstance(solver_options.linear_preconditioner_type, PreconditionerType):
+            precond_type = solver_options.linear_preconditioner_type
 
     rtol = solver_options.linear_relative_tol if solver_options is not None else 1e-10
     atol = solver_options.linear_absolute_tol if solver_options is not None else 1e-10
@@ -329,13 +345,13 @@ def linear_solve(
 
     match solver_type:
         # --- JAX Native Solvers ---
-        case JAXLinearSolverType.DENSE_INVERSE_JNP:
+        case LinearSolverType.JAX_DENSE_INVERSE_JNP:
             A_dense = _to_dense_matrix(A, n)
             A_eff = A_dense.T if transpose else A_dense
             x = jnp.linalg.solve(A_eff, b)
             return x, info
 
-        case JAXLinearSolverType.CG_JAX_SCIPY:
+        case LinearSolverType.JAX_CG_SCIPY:
             A_matvec = _to_matvec(A, transpose=transpose)
             x, _ = jax.scipy.sparse.linalg.cg(
                 A=A_matvec,
@@ -348,7 +364,7 @@ def linear_solve(
             )
             return x, info
 
-        case JAXLinearSolverType.CG_JAX_SCIPY_W_INFO:
+        case LinearSolverType.JAX_CG_SCIPY_W_INFO:
             A_matvec = _to_matvec(A, transpose=transpose)
             x, cg_info = cg_w_info(
                 A=A_matvec,
@@ -365,7 +381,7 @@ def linear_solve(
             )
             return x, info
 
-        case JAXLinearSolverType.GMRES_JAX_SCIPY:
+        case LinearSolverType.JAX_GMRES_SCIPY:
             A_matvec = _to_matvec(A, transpose=transpose)
             x, _ = jax.scipy.sparse.linalg.gmres(
                 A=A_matvec,
@@ -378,7 +394,7 @@ def linear_solve(
             )
             return x, info
 
-        case JAXLinearSolverType.BICGSTAB_JAX_SCIPY:
+        case LinearSolverType.JAX_BICGSTAB_SCIPY:
             A_matvec = _to_matvec(A, transpose=transpose)
             x, _ = jax.scipy.sparse.linalg.bicgstab(
                 A=A_matvec,
@@ -392,30 +408,30 @@ def linear_solve(
             return x, info
 
         # --- JAXOpt Solvers ---
-        case JAXLinearSolverType.DENSE_INVERSE_JAXOPT:
+        case LinearSolverType.JAX_DENSE_INVERSE_JAXOPT:
             if not JAXOPT_AVAILABLE:
-                raise ImportError("jaxopt is required for DENSE_INVERSE_JAXOPT")
+                raise ImportError("jaxopt is required for JAX_DENSE_INVERSE_JAXOPT")
             A_matvec = _to_matvec(A, transpose=transpose)
             x = jaxopt.linear_solve.solve_inv(matvec=A_matvec, b=b)
             return x, info
 
-        case JAXLinearSolverType.LU_JAXOPT:
+        case LinearSolverType.JAX_LU_JAXOPT:
             if not JAXOPT_AVAILABLE:
-                raise ImportError("jaxopt is required for LU_JAXOPT")
+                raise ImportError("jaxopt is required for JAX_LU_JAXOPT")
             A_matvec = _to_matvec(A, transpose=transpose)
             x = jaxopt.linear_solve.solve_lu(matvec=A_matvec, b=b)
             return x, info
 
-        case JAXLinearSolverType.CHOLESKY_JAXOPT:
+        case LinearSolverType.JAX_CHOLESKY_JAXOPT:
             if not JAXOPT_AVAILABLE:
-                raise ImportError("jaxopt is required for CHOLESKY_JAXOPT")
+                raise ImportError("jaxopt is required for JAX_CHOLESKY_JAXOPT")
             A_matvec = _to_matvec(A, transpose=transpose)
             x = jaxopt.linear_solve.solve_cholesky(matvec=A_matvec, b=b)
             return x, info
 
-        case JAXLinearSolverType.CG_JAXOPT:
+        case LinearSolverType.JAX_CG_JAXOPT:
             if not JAXOPT_AVAILABLE:
-                raise ImportError("jaxopt is required for CG_JAXOPT")
+                raise ImportError("jaxopt is required for JAX_CG_JAXOPT")
             A_matvec = _to_matvec(A, transpose=transpose)
             x = jaxopt.linear_solve.solve_cg(
                 matvec=A_matvec,
@@ -427,9 +443,9 @@ def linear_solve(
             )
             return x, info
 
-        case JAXLinearSolverType.GMRES_JAXOPT:
+        case LinearSolverType.JAX_GMRES_JAXOPT:
             if not JAXOPT_AVAILABLE:
-                raise ImportError("jaxopt is required for GMRES_JAXOPT")
+                raise ImportError("jaxopt is required for JAX_GMRES_JAXOPT")
             A_matvec = _to_matvec(A, transpose=transpose)
             x = jaxopt.linear_solve.solve_gmres(
                 matvec=A_matvec,
@@ -441,9 +457,9 @@ def linear_solve(
             )
             return x, info
 
-        case JAXLinearSolverType.BICGSTAB_JAXOPT:
+        case LinearSolverType.JAX_BICGSTAB_JAXOPT:
             if not JAXOPT_AVAILABLE:
-                raise ImportError("jaxopt is required for BICGSTAB_JAXOPT")
+                raise ImportError("jaxopt is required for JAX_BICGSTAB_JAXOPT")
             A_matvec = _to_matvec(A, transpose=transpose)
             x = jaxopt.linear_solve.solve_bicgstab(
                 matvec=A_matvec,
@@ -456,7 +472,7 @@ def linear_solve(
             return x, info
 
         # --- CuPy / SciPy Sparse Solvers ---
-        case JAXLinearSolverType.SPSOLVE_CUPY:
+        case LinearSolverType.JAX_SPSOLVE_CUPY:
             res_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
             shape_static = (int(A.shape[0]), int(A.shape[1])) if hasattr(A, "shape") else (n, n)
             if hasattr(A, "rows") and hasattr(A, "cols") and hasattr(A, "vals"):
@@ -475,10 +491,10 @@ def linear_solve(
                 )
             elif isinstance(A, (jnp.ndarray, np.ndarray)):
                 warnings.warn(
-                    "Dense array passed to sparse direct solver SPSOLVE_CUPY. "
+                    "Dense array passed to sparse direct solver JAX_SPSOLVE_CUPY. "
                     "Converting dense matrix to sparse CSR format on each solve, which degrades performance. "
                     "Fix: Pass a sparse COO matrix (e.g., jsparse.COO or COOData) or use a dense solver "
-                    "(e.g., DENSE_INVERSE_JNP, LU_JAXOPT).",
+                    "(e.g., JAX_DENSE_INVERSE_JNP, JAX_LU_JAXOPT).",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -491,18 +507,18 @@ def linear_solve(
                 )
             elif callable(A):
                 raise TypeError(
-                    "SPSOLVE_CUPY is a sparse direct solver and cannot accept a callable operator. "
-                    "Fix: Use a matrix-free iterative solver (e.g., CG_JAX_SCIPY, GMRES_JAX_SCIPY) "
+                    "JAX_SPSOLVE_CUPY is a sparse direct solver and cannot accept a callable operator. "
+                    "Fix: Use a matrix-free iterative solver (e.g., JAX_CG_SCIPY, JAX_GMRES_SCIPY) "
                     "or provide an explicit sparse matrix (e.g., jsparse.COO or COOData)."
                 )
             else:
                 raise TypeError(
-                    f"Unsupported matrix type {type(A)} for SPSOLVE_CUPY. "
+                    f"Unsupported matrix type {type(A)} for JAX_SPSOLVE_CUPY. "
                     "Expected jax.experimental.sparse.COO, COOData, or array."
                 )
             return x, info
 
-        case JAXLinearSolverType.LU_CUPY:
+        case LinearSolverType.JAX_LU_CUPY:
             res_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
             shape_static = (int(A.shape[0]), int(A.shape[1])) if hasattr(A, "shape") else (n, n)
             if hasattr(A, "rows") and hasattr(A, "cols") and hasattr(A, "vals"):
@@ -521,10 +537,10 @@ def linear_solve(
                 )
             elif isinstance(A, (jnp.ndarray, np.ndarray)):
                 warnings.warn(
-                    "Dense array passed to sparse direct solver LU_CUPY. "
+                    "Dense array passed to sparse direct solver JAX_LU_CUPY. "
                     "Converting dense matrix to sparse CSR format on each solve, which degrades performance. "
                     "Fix: Pass a sparse COO matrix (e.g., jsparse.COO or COOData) or use a dense solver "
-                    "(e.g., DENSE_INVERSE_JNP, LU_JAXOPT).",
+                    "(e.g., JAX_DENSE_INVERSE_JNP, JAX_LU_JAXOPT).",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -537,21 +553,21 @@ def linear_solve(
                 )
             elif callable(A):
                 raise TypeError(
-                    "LU_CUPY is a sparse direct solver and cannot accept a callable operator. "
-                    "Fix: Use a matrix-free iterative solver (e.g., CG_JAX_SCIPY, GMRES_JAX_SCIPY) "
+                    "JAX_LU_CUPY is a sparse direct solver and cannot accept a callable operator. "
+                    "Fix: Use a matrix-free iterative solver (e.g., JAX_CG_SCIPY, JAX_GMRES_SCIPY) "
                     "or provide an explicit sparse matrix (e.g., jsparse.COO or COOData)."
                 )
             else:
                 raise TypeError(
-                    f"Unsupported matrix type {type(A)} for LU_CUPY. "
+                    f"Unsupported matrix type {type(A)} for JAX_LU_CUPY. "
                     "Expected jax.experimental.sparse.COO, COOData, or array."
                 )
             return x, info
 
         # --- PyPardiso Solver ---
-        case JAXLinearSolverType.SPSOLVE_PYPARDISO:
+        case LinearSolverType.JAX_SPSOLVE_PYPARDISO:
             if not PYPARDISO_AVAILABLE:
-                raise ImportError("pypardiso is required for SPSOLVE_PYPARDISO")
+                raise ImportError("pypardiso is required for JAX_SPSOLVE_PYPARDISO")
             res_info = jax.ShapeDtypeStruct(b.shape, b.dtype)
             shape_static = (int(A.shape[0]), int(A.shape[1])) if hasattr(A, "shape") else (n, n)
             if hasattr(A, "rows") and hasattr(A, "cols") and hasattr(A, "vals"):
@@ -570,10 +586,10 @@ def linear_solve(
                 )
             elif isinstance(A, (jnp.ndarray, np.ndarray)):
                 warnings.warn(
-                    "Dense array passed to sparse direct solver SPSOLVE_PYPARDISO. "
+                    "Dense array passed to sparse direct solver JAX_SPSOLVE_PYPARDISO. "
                     "Converting dense matrix to sparse CSR format on each solve, which degrades performance. "
                     "Fix: Pass a sparse COO matrix (e.g., jsparse.COO or COOData) or use a dense solver "
-                    "(e.g., DENSE_INVERSE_JNP, LU_JAXOPT).",
+                    "(e.g., JAX_DENSE_INVERSE_JNP, JAX_LU_JAXOPT).",
                     UserWarning,
                     stacklevel=2,
                 )
@@ -586,22 +602,90 @@ def linear_solve(
                 )
             elif callable(A):
                 raise TypeError(
-                    "SPSOLVE_PYPARDISO is a sparse direct solver and cannot accept a callable operator. "
-                    "Fix: Use a matrix-free iterative solver (e.g., CG_JAX_SCIPY, GMRES_JAX_SCIPY) "
+                    "JAX_SPSOLVE_PYPARDISO is a sparse direct solver and cannot accept a callable operator. "
+                    "Fix: Use a matrix-free iterative solver (e.g., JAX_CG_SCIPY, JAX_GMRES_SCIPY) "
                     "or provide an explicit sparse matrix (e.g., jsparse.COO or COOData)."
                 )
             else:
                 raise TypeError(
-                    f"Unsupported matrix type {type(A)} for SPSOLVE_PYPARDISO. "
+                    f"Unsupported matrix type {type(A)} for JAX_SPSOLVE_PYPARDISO. "
                     "Expected jax.experimental.sparse.COO, COOData, or array."
                 )
             return x, info
 
         # --- AMGX Solver ---
-        case JAXLinearSolverType.AMGX:
+        case LinearSolverType.JAX_AMGX:
             if not PYAMGX_AVAILABLE:
                 raise ImportError("pyamgx is required for AMGX solver")
             raise NotImplementedError("AMGX solver is not configured in this environment.")
 
         case _:
             raise NotImplementedError(f"Linear solver type {solver_type} is not implemented.")
+
+
+@dataclass
+class JAXLinearSolver:
+    """JAX linear solver wrapping operator A, options, and preconditioner."""
+
+    A: Any
+    options: LinearSolverOptions
+    preconditioner: Callable[[jnp.ndarray], jnp.ndarray] | None = None
+    last_info: LinearSolverResultInfo | None = None
+    _shape: tuple[int, int] | None = None
+    _sparsity_pattern: Any = None
+
+    def __post_init__(self):
+        self._shape = _get_operator_shape(self.A)
+        self._sparsity_pattern = _get_operator_sparsity_pattern(self.A)
+        if self.preconditioner is None and self.options.linear_preconditioner_type is not PreconditionerType.JAX_NONE:
+            shape = self._shape if self._shape is not None else None
+            self.preconditioner = build_preconditioner(self.options.linear_preconditioner_type, A=self.A, shape=shape)
+
+    def solve(self, b: jnp.ndarray, transpose: bool = False) -> jnp.ndarray:
+        """Solve A x = b (or A^T x = b if transpose=True)."""
+        x, info = linear_solve(
+            self.A,
+            b,
+            solver_options=self.options,
+            preconditioner=self.preconditioner,
+            transpose=transpose,
+        )
+        self.last_info = info
+        return x
+
+    def update_operator(self, A: Any) -> JAXLinearSolver:
+        """Update operator values, checking shape and sparsity pattern."""
+        new_shape = _get_operator_shape(A)
+        new_pattern = _get_operator_sparsity_pattern(A)
+
+        shape_changed = (self._shape is not None and new_shape is not None and self._shape != new_shape)
+        pattern_changed = False
+        if self._sparsity_pattern is not None and new_pattern is not None:
+            old_r, old_c = self._sparsity_pattern
+            new_r, new_c = new_pattern
+            if len(old_r) != len(new_r) or not (np.array_equal(old_r, new_r) and np.array_equal(old_c, new_c)):
+                pattern_changed = True
+        elif (self._sparsity_pattern is None) != (new_pattern is None):
+            pattern_changed = True
+
+        if shape_changed or pattern_changed:
+            reason = "shape changed" if shape_changed else "sparsity pattern changed"
+            warnings.warn(
+                f"JAXLinearSolver operator {reason} during update_operator. "
+                "Rebuilding preconditioner and solver metadata.",
+                UserWarning,
+                stacklevel=2,
+            )
+            self._shape = new_shape
+            self._sparsity_pattern = new_pattern
+
+        self.A = A
+        if self.options.linear_preconditioner_type is not PreconditionerType.JAX_NONE:
+            self.preconditioner = build_preconditioner(self.options.linear_preconditioner_type, A=self.A, shape=self._shape)
+        return self
+
+    def destroy(self) -> None:
+        """Cleanup references."""
+        self.A = None
+        self.preconditioner = None
+

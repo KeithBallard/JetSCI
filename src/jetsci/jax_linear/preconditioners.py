@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import jax.experimental.sparse as jsparse
 
-from ..options import JAXPreconditionerType
+from ..options import PreconditionerType
 
 try:
     import cupy as cp
@@ -21,16 +21,16 @@ except ImportError:
 
 
 def build_preconditioner(
-    precond_type: JAXPreconditionerType,
+    precond_type: PreconditionerType,
     A: Any = None,
     diag: jnp.ndarray | None = None,
     shape: tuple[int, int] | None = None,
 ) -> Callable[[jnp.ndarray], jnp.ndarray] | None:
     """Build a preconditioner callable M(r) -> z based on precond_type."""
-    if precond_type is JAXPreconditionerType.NONE or precond_type is None:
+    if precond_type is PreconditionerType.JAX_NONE or precond_type is None:
         return None
 
-    if precond_type is JAXPreconditionerType.JACOBI:
+    if precond_type is PreconditionerType.JAX_JACOBI:
         if diag is not None:
             safe_diag = jnp.where(jnp.abs(diag) < 1e-15, 1.0, diag)
             return lambda r: r / safe_diag
@@ -57,15 +57,15 @@ def build_preconditioner(
                     f"Cannot extract diagonal for JACOBI preconditioner from operator of type {type(A)}. "
                     "Jacobi preconditioning requires explicit diagonal entries. "
                     "Fix: Provide diagonal entries explicitly via `diag=...`, pass a sparse matrix "
-                    "(e.g., jsparse.COO or COOData), or set preconditioning to JAXPreconditionerType.NONE."
+                    "(e.g., jsparse.COO or COOData), or set preconditioning to PreconditionerType.JAX_NONE."
                 )
 
         raise ValueError(
             "JACOBI preconditioner requires either `diag` or `A` to extract diagonal elements. "
-            "Neither was provided. Fix: Pass diag=... or A=..., or set preconditioning to JAXPreconditionerType.NONE."
+            "Neither was provided. Fix: Pass diag=... or A=..., or set preconditioning to PreconditionerType.JAX_NONE."
         )
 
-    if precond_type is JAXPreconditionerType.ILU_CUPY:
+    if precond_type is PreconditionerType.JAX_ILU_CUPY:
         if A is None:
             raise ValueError(
                 "ILU_CUPY preconditioner requires a matrix A. "
@@ -75,7 +75,7 @@ def build_preconditioner(
         if callable(A):
             raise TypeError(
                 f"ILU_CUPY preconditioner requires an explicit sparse matrix representation, got callable {type(A)}. "
-                "Fix: Pass a sparse matrix (e.g. jsparse.COO or COOData) or use JAXPreconditionerType.NONE."
+                "Fix: Pass a sparse matrix (e.g. jsparse.COO or COOData) or use PreconditionerType.JAX_NONE."
             )
 
         # Convert A to CSR format

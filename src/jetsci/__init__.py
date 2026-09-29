@@ -22,14 +22,14 @@ from .jax_newton_raph import JAXNewtonRaphsonSolver
 
 __all__ = [
     "NonlinearSolverType",
-    "PETScPreconditionerType",
-    "JAXPreconditionerType",
-    "PETScLinearSolverType",
-    "JAXLinearSolverType",
+    "PreconditionerType",
+    "LinearSolverType",
+    "LinearSolverOptions",
     "SolverOptions",
     "differentiable_solve",
     "differentiable_linear_solve",
     "build_solver_with_reuse",
+    "build_linear_solver_with_reuse",
     "linear_solve",
     "LinearSolverResultInfo",
     "cg_w_info",

@@ -5,10 +5,8 @@ import jax.numpy as jnp
 import jetsci
 from jetsci.options import (
     NonlinearSolverType,
-    JAXLinearSolverType,
-    JAXPreconditionerType,
-    PETScLinearSolverType,
-    PETScPreconditionerType,
+    LinearSolverType,
+    PreconditionerType,
     SolverOptions,
 )
 
@@ -40,8 +38,8 @@ def test_jax_newton_autodiff_forward_reverse():
 
     opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
-        linear_solve_type=JAXLinearSolverType.CG_JAX_SCIPY,
-        linear_precond_type=JAXPreconditionerType.NONE,
+        linear_solver_type=LinearSolverType.JAX_CG_SCIPY,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
     )
 
     # Primal solve
@@ -75,14 +73,14 @@ def test_jax_and_petsc_equivalence():
 
     jax_opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
-        linear_solve_type=JAXLinearSolverType.GMRES_JAX_SCIPY,
-        linear_precond_type=JAXPreconditionerType.NONE,
+        linear_solver_type=LinearSolverType.JAX_GMRES_SCIPY,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
     )
 
     petsc_opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.PETSC_SNES,
-        linear_solve_type=PETScLinearSolverType.BCGS,
-        linear_precond_type=PETScPreconditionerType.NONE,
+        linear_solver_type=LinearSolverType.PETSC_BCGS,
+        linear_preconditioner_type=PreconditionerType.PETSC_NONE,
     )
 
     sol_jax, _ = jetsci.differentiable_solve(jax_opts, residual, None, x0, phi)
@@ -112,8 +110,8 @@ def test_multi_parameter_differentiable_solve():
 
     opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
-        linear_solve_type=JAXLinearSolverType.LU_JAXOPT,
-        linear_precond_type=JAXPreconditionerType.NONE,
+        linear_solver_type=LinearSolverType.JAX_LU_JAXOPT,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
     )
 
     sol, _ = jetsci.differentiable_solve(opts, multi_param_residual, None, x0, p1, p2)
