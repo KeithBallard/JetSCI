@@ -7,22 +7,22 @@ import jax
 import jax.lax as lax
 import jax.numpy as jnp
 
-from ..options import SolverOptions, NonlinearSolverType, JAXLinearSolverType, JAXPreconditionerType
+from ..options import SolverOptions, NonlinearSolverType, LinearSolverType, PreconditionerType
 from ..jax_linear import linear_solve, LinearSolverResultInfo
 
 
 def validate_jax_solver_options(options: SolverOptions) -> None:
     """Validate that selected solver options are compatible with JAX Newton-Raphson."""
     if options.nonlinear_solver_type is NonlinearSolverType.JAX_NEWTON_RAPHSON:
-        if not isinstance(options.linear_solve_type, JAXLinearSolverType):
+        if not options.linear_solver_type.is_jax:
             raise TypeError(
                 "JAX Newton-Raphson requires a JAX linear solver type. "
-                f"Got {options.linear_solve_type!r}."
+                f"Got {options.linear_solver_type!r}."
             )
-        if not isinstance(options.linear_precond_type, JAXPreconditionerType):
+        if not options.linear_preconditioner_type.is_jax:
             raise TypeError(
                 "JAX Newton-Raphson requires a JAX preconditioner type. "
-                f"Got {options.linear_precond_type!r}."
+                f"Got {options.linear_preconditioner_type!r}."
             )
 
 
@@ -35,19 +35,19 @@ class JAXNewtonRaphsonSolver:
     options: SolverOptions
 
     def __post_init__(self):
-        if self.jacobian_func is None and self.options.linear_solve_type in (
-            JAXLinearSolverType.DENSE_INVERSE_JNP,
-            JAXLinearSolverType.SPSOLVE_CUPY,
-            JAXLinearSolverType.LU_CUPY,
-            JAXLinearSolverType.SPSOLVE_PYPARDISO,
+        if self.jacobian_func is None and self.options.linear_solver_type in (
+            LinearSolverType.JAX_DENSE_INVERSE_JNP,
+            LinearSolverType.JAX_SPSOLVE_CUPY,
+            LinearSolverType.JAX_LU_CUPY,
+            LinearSolverType.JAX_SPSOLVE_PYPARDISO,
         ):
             warnings.warn(
                 f"No Jacobian function J(x) provided to JAX Newton-Raphson with linear solver "
-                f"'{self.options.linear_solve_type.name}'. A dense Jacobian will be materialized via "
+                f"'{self.options.linear_solver_type.name}'. A dense Jacobian will be materialized via "
                 f"jax.jacfwd(R)(x) on every iteration. This scales as O(N^2) memory and O(N) evaluations, "
                 f"severely degrading performance for large systems. "
                 f"Fix: Provide an explicit Jacobian function J(x) returning a sparse matrix, or use a "
-                f"matrix-free linear solver (e.g., JAXLinearSolverType.CG_JAX_SCIPY).",
+                f"matrix-free linear solver (e.g., LinearSolverType.JAX_CG_SCIPY).",
                 UserWarning,
                 stacklevel=2,
             )
@@ -76,11 +76,11 @@ class JAXNewtonRaphsonSolver:
             if J is not None:
                 J_op = J(x)
             else:
-                if opts.linear_solve_type in (
-                    JAXLinearSolverType.DENSE_INVERSE_JNP,
-                    JAXLinearSolverType.SPSOLVE_CUPY,
-                    JAXLinearSolverType.LU_CUPY,
-                    JAXLinearSolverType.SPSOLVE_PYPARDISO,
+                if opts.linear_solver_type in (
+                    LinearSolverType.JAX_DENSE_INVERSE_JNP,
+                    LinearSolverType.JAX_SPSOLVE_CUPY,
+                    LinearSolverType.JAX_LU_CUPY,
+                    LinearSolverType.JAX_SPSOLVE_PYPARDISO,
                 ):
                     J_op = jax.jacfwd(R)(x)
                 else:
@@ -120,11 +120,11 @@ class JAXNewtonRaphsonSolver:
         if J is not None:
             J_op = J(x_star)
         else:
-            if opts.linear_solve_type in (
-                JAXLinearSolverType.DENSE_INVERSE_JNP,
-                JAXLinearSolverType.SPSOLVE_CUPY,
-                JAXLinearSolverType.LU_CUPY,
-                JAXLinearSolverType.SPSOLVE_PYPARDISO,
+            if opts.linear_solver_type in (
+                LinearSolverType.JAX_DENSE_INVERSE_JNP,
+                LinearSolverType.JAX_SPSOLVE_CUPY,
+                LinearSolverType.JAX_LU_CUPY,
+                LinearSolverType.JAX_SPSOLVE_PYPARDISO,
             ):
                 J_mat = jax.jacfwd(R)(x_star)
                 J_op = J_mat

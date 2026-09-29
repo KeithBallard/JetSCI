@@ -17,16 +17,18 @@ from petsc4py import PETSc
 
 
 _PETSC_KSP_TYPES = {
-    PETScLinearSolverType.CG: "cg",
-    PETScLinearSolverType.LGMRES: "lgmres",
-    PETScLinearSolverType.BCGS: "bcgs",
-    PETScLinearSolverType.PREONLY: "preonly",
+    LinearSolverType.PETSC_CG: "cg",
+    LinearSolverType.PETSC_GMRES: "gmres",
+    LinearSolverType.PETSC_LGMRES: "lgmres",
+    LinearSolverType.PETSC_BCGS: "bcgs",
+    LinearSolverType.PETSC_PREONLY: "preonly",
+    LinearSolverType.PETSC_MINRES: "minres",
 }
 
 _PETSC_PC_TYPES = {
-    PETScPreconditionerType.NONE: "none",
-    PETScPreconditionerType.JACOBI: "jacobi",
-    PETScPreconditionerType.ILU: "ilu",
+    PreconditionerType.PETSC_NONE: "none",
+    PreconditionerType.PETSC_JACOBI: "jacobi",
+    PreconditionerType.PETSC_ILU: "ilu",
 }
 
 
@@ -124,7 +126,7 @@ def _apply_ksp_options(snes, options: SolverOptions):
     #DEBUG PRINT
     print("calling solver_lifecycle _apply_ksp_options")
     ksp = snes.getKSP()
-    ksp.setType(_PETSC_KSP_TYPES[options.linear_solve_type])
+    ksp.setType(_PETSC_KSP_TYPES[options.linear_solver_type])
     if hasattr(PETSc.KSP, "NormType"):
         ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
     ksp.setTolerances(
@@ -133,12 +135,12 @@ def _apply_ksp_options(snes, options: SolverOptions):
         max_it=options.linear_max_iter,
     )
     pc = ksp.getPC()
-    pc.setType(_PETSC_PC_TYPES[options.linear_precond_type])
+    pc.setType(_PETSC_PC_TYPES[options.linear_preconditioner_type])
 
 
-def _apply_ksp_options_direct(ksp, options: SolverOptions):
+def _apply_ksp_options_direct(ksp, options: LinearSolverOptions):
     """Apply KSP/PC options to a standalone PETSc KSP object."""
-    ksp.setType(_PETSC_KSP_TYPES[options.linear_solve_type])
+    ksp.setType(_PETSC_KSP_TYPES[options.linear_solver_type])
     if hasattr(PETSc.KSP, "NormType"):
         ksp.setNormType(PETSc.KSP.NormType.UNPRECONDITIONED)
     ksp.setTolerances(
@@ -147,7 +149,7 @@ def _apply_ksp_options_direct(ksp, options: SolverOptions):
         max_it=options.linear_max_iter,
     )
     pc = ksp.getPC()
-    pc.setType(_PETSC_PC_TYPES[options.linear_precond_type])
+    pc.setType(_PETSC_PC_TYPES[options.linear_preconditioner_type])
 
 
 def build_petsc_snes_from_options(

@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import jetsci
 from jetsci.options import (
     NonlinearSolverType,
-    JAXLinearSolverType,
-    JAXPreconditionerType,
+    LinearSolverType,
+    PreconditionerType,
     SolverOptions,
 )
 from jetsci.jax_newton_raph import JAXNewtonRaphsonSolver, build_jax_solver_with_reuse
@@ -28,24 +28,24 @@ def jacobian_fn(x):
 
 
 @pytest.mark.parametrize("linear_solver", [
-    JAXLinearSolverType.DENSE_INVERSE_JNP,
-    JAXLinearSolverType.CG_JAX_SCIPY,
-    JAXLinearSolverType.GMRES_JAX_SCIPY,
-    JAXLinearSolverType.BICGSTAB_JAX_SCIPY,
-    JAXLinearSolverType.LU_JAXOPT,
-    JAXLinearSolverType.CHOLESKY_JAXOPT,
-    JAXLinearSolverType.CG_JAXOPT,
-    JAXLinearSolverType.GMRES_JAXOPT,
-    JAXLinearSolverType.BICGSTAB_JAXOPT,
-    JAXLinearSolverType.SPSOLVE_CUPY,
-    JAXLinearSolverType.LU_CUPY,
-    JAXLinearSolverType.SPSOLVE_PYPARDISO,
+    LinearSolverType.JAX_DENSE_INVERSE_JNP,
+    LinearSolverType.JAX_CG_SCIPY,
+    LinearSolverType.JAX_GMRES_SCIPY,
+    LinearSolverType.JAX_BICGSTAB_SCIPY,
+    LinearSolverType.JAX_LU_JAXOPT,
+    LinearSolverType.JAX_CHOLESKY_JAXOPT,
+    LinearSolverType.JAX_CG_JAXOPT,
+    LinearSolverType.JAX_GMRES_JAXOPT,
+    LinearSolverType.JAX_BICGSTAB_JAXOPT,
+    LinearSolverType.JAX_SPSOLVE_CUPY,
+    LinearSolverType.JAX_LU_CUPY,
+    LinearSolverType.JAX_SPSOLVE_PYPARDISO,
 ])
 def test_newton_raphson_solvers(linear_solver):
     opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
-        linear_solve_type=linear_solver,
-        linear_precond_type=JAXPreconditionerType.NONE,
+        linear_solver_type=linear_solver,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
         nonlinear_max_iter=25,
         nonlinear_relative_tol=1e-8,
         nonlinear_absolute_tol=1e-8,
@@ -67,8 +67,8 @@ def test_newton_raphson_ad_jacobian():
     # Test with jacobian_func=None (automatic autodiff Jacobian)
     opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
-        linear_solve_type=JAXLinearSolverType.GMRES_JAX_SCIPY,
-        linear_precond_type=JAXPreconditionerType.NONE,
+        linear_solver_type=LinearSolverType.JAX_GMRES_SCIPY,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
     )
 
     x0 = jnp.array([0.5, 0.5])
@@ -86,8 +86,8 @@ def test_newton_raphson_ad_jacobian():
 def test_newton_raphson_companion_linear_solve():
     opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
-        linear_solve_type=JAXLinearSolverType.DENSE_INVERSE_JNP,
-        linear_precond_type=JAXPreconditionerType.NONE,
+        linear_solver_type=LinearSolverType.JAX_DENSE_INVERSE_JNP,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
     )
 
     solver = JAXNewtonRaphsonSolver(
@@ -112,8 +112,8 @@ def test_newton_raphson_companion_linear_solve():
 def test_lifecycle_reuse():
     opts = SolverOptions(
         nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
-        linear_solve_type=JAXLinearSolverType.CG_JAX_SCIPY,
-        linear_precond_type=JAXPreconditionerType.NONE,
+        linear_solver_type=LinearSolverType.JAX_CG_SCIPY,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
     )
 
     x0 = jnp.array([0.8, 0.8])
