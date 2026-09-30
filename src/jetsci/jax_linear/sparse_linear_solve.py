@@ -13,6 +13,7 @@ import jax.experimental.sparse as jsparse
 import jax.lax as lax
 
 from ..options import LinearSolverType, PreconditionerType, LinearSolverOptions, SolverOptions
+from ..coo_data import COOData, to_coo_data
 from .solve_cg import cg_w_info
 from .preconditioners import build_preconditioner
 
@@ -283,12 +284,16 @@ def _cupy_splu_from_dense(A_dense, b, transpose: bool):
 
 
 def _get_operator_shape(A: Any) -> tuple[int, int] | None:
+    if isinstance(A, tuple) and len(A) == 4:
+        return (int(A[3][0]), int(A[3][1]))
     if hasattr(A, "shape"):
         return (int(A.shape[0]), int(A.shape[1]))
     return None
 
 
 def _get_operator_sparsity_pattern(A: Any) -> Any:
+    if isinstance(A, tuple) and len(A) == 4:
+        return (np.asarray(A[0]), np.asarray(A[1]))
     if hasattr(A, "rows") and hasattr(A, "cols"):
         return (np.asarray(A.rows), np.asarray(A.cols))
     elif isinstance(A, jsparse.COO):
@@ -307,6 +312,8 @@ def linear_solve(
     transpose: bool = False,
 ) -> tuple[jnp.ndarray, LinearSolverResultInfo]:
     """Solve the linear system A x = b (or A^T x = b if transpose=True)."""
+    if isinstance(A, tuple) and len(A) == 4:
+        A = to_coo_data(A)
     n = b.shape[0]
     if x0 is None:
         x0 = jnp.zeros_like(b)
@@ -635,19 +642,22 @@ class JAXLinearSolver:
     _sparsity_pattern: Any = None
 
     def __post_init__(self):
+        if isinstance(self.A, tuple) and len(self.A) == 4:
+            self.A = to_coo_data(self.A)
         self._shape = _get_operator_shape(self.A)
         self._sparsity_pattern = _get_operator_sparsity_pattern(self.A)
         if self.preconditioner is None and self.options.linear_preconditioner_type is not PreconditionerType.JAX_NONE:
             shape = self._shape if self._shape is not None else None
             self.preconditioner = build_preconditioner(self.options.linear_preconditioner_type, A=self.A, shape=shape)
 
-    def solve(self, b: jnp.ndarray, transpose: bool = False) -> jnp.ndarray:
+    def solve(self, b: jnp.ndarray, transpose: bool = False, x0: jnp.ndarray | None = None) -> jnp.ndarray:
         """Solve A x = b (or A^T x = b if transpose=True)."""
         x, info = linear_solve(
             self.A,
             b,
             solver_options=self.options,
             preconditioner=self.preconditioner,
+            x0=x0,
             transpose=transpose,
         )
         self.last_info = info
@@ -655,6 +665,8 @@ class JAXLinearSolver:
 
     def update_operator(self, A: Any) -> JAXLinearSolver:
         """Update operator values, checking shape and sparsity pattern."""
+        if isinstance(A, tuple) and len(A) == 4:
+            A = to_coo_data(A)
         new_shape = _get_operator_shape(A)
         new_pattern = _get_operator_sparsity_pattern(A)
 

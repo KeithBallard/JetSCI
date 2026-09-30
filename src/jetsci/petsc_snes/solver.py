@@ -16,8 +16,9 @@ from ..options import (
     SolverOptions,
     NonlinearSolverType,
 )
+from ..coo_data import COOData, to_coo_data
+from ..jax_linear import LinearSolverResultInfo
 from ..petsc_ksp.linear_methods import (
-    COOData,
     init_matrix_from_COOData,
     init_ksp,
     update_matrix_values,
@@ -59,6 +60,8 @@ def _to_petsc_coo_and_metadata(A: Any) -> tuple[COOData, tuple[int, int], tuple[
             stacklevel=3,
         )
         coo_data = convert_jax_dense_mat_to_coo_data(jnp.asarray(A))
+    elif isinstance(A, tuple) and len(A) == 4:
+        coo_data = to_coo_data(A)
     elif hasattr(A, "rows") and hasattr(A, "cols") and hasattr(A, "vals"):
         coo_data = A if isinstance(A, COOData) else COOData(
             shape=jnp.asarray(A.shape, dtype=jnp.int64),
@@ -76,7 +79,7 @@ def _to_petsc_coo_and_metadata(A: Any) -> tuple[COOData, tuple[int, int], tuple[
     else:
         raise TypeError(
             f"Unsupported matrix type {type(A)} for PETSc linear solver. "
-            "Expected jsparse.COO, COOData, or dense array."
+            "Expected COOData, (rows, cols, vals, shape) tuple, jsparse.COO, or dense array."
         )
 
     shape = (int(coo_data.shape[0]), int(coo_data.shape[1]))
@@ -149,6 +152,7 @@ class PETScLinearSolver:
     matrix_data: object | None = None
     operator_matrix: object | None = None
     working_vector: object | None = None
+    last_info: LinearSolverResultInfo | None = None
     _coo_data: COOData | None = None
     _shape: tuple[int, int] | None = None
     _sparsity_pattern: Any | None = None
@@ -226,11 +230,11 @@ class PETScLinearSolver:
 
         return self
 
-    def solve(self, rhs: jnp.ndarray, transpose: bool = False) -> jnp.ndarray:
+    def solve(self, rhs: jnp.ndarray, transpose: bool = False, x0: jnp.ndarray | None = None) -> jnp.ndarray:
         """Solve A x = rhs (or A^T x = rhs if transpose=True), returning a JAX array."""
         if transpose:
-            return self.solve_transpose_to_jax(rhs)
-        return self.solve_to_jax(rhs)
+            return self.solve_transpose_to_jax(rhs, x0=x0)
+        return self.solve_to_jax(rhs, x0=x0)
 
     def linear_solve(self, rhs: jnp.ndarray, transpose: bool = False):
         """Solve with this KSP object and return a JAX array."""
@@ -240,13 +244,22 @@ class PETScLinearSolver:
         """Solve adjoint problem with this KSP object and return a JAX array."""
         return self.solve(rhs, transpose=True)
 
-    def solve_to_jax(self, rhs: jnp.ndarray) -> jnp.ndarray:
+    def solve_to_jax(self, rhs: jnp.ndarray, x0: jnp.ndarray | None = None) -> jnp.ndarray:
         """Solve and explicitly copy the PETSc Vec result into a JAX array."""
         self._ensure_size(rhs)
         rhs_vec = jax_array_to_petsc_vec(rhs)
         x = self.working_vector if self.working_vector is not None else rhs_vec.duplicate()
+        if x0 is not None:
+            x0_vec = jax_array_to_petsc_vec(x0)
+            x0_vec.copy(x)
+            x0_vec.destroy()
+            self.ksp.setInitialGuessNonzero(True)
+        else:
+            self.ksp.setInitialGuessNonzero(False)
         try:
             self.ksp.solve(rhs_vec, x)
+            iters = self.ksp.getIterationNumber()
+            self.last_info = LinearSolverResultInfo(iterations=iters)
             result = petsc_vec_to_jax_array(x).copy()
             result.block_until_ready()
             return result
@@ -255,13 +268,22 @@ class PETScLinearSolver:
             if self.working_vector is None:
                 x.destroy()
 
-    def solve_transpose_to_jax(self, rhs: jnp.ndarray) -> jnp.ndarray:
+    def solve_transpose_to_jax(self, rhs: jnp.ndarray, x0: jnp.ndarray | None = None) -> jnp.ndarray:
         """Solve transpose and explicitly copy the PETSc Vec result into a JAX array."""
         self._ensure_size(rhs)
         rhs_vec = jax_array_to_petsc_vec(rhs)
         x = self.working_vector if self.working_vector is not None else rhs_vec.duplicate()
+        if x0 is not None:
+            x0_vec = jax_array_to_petsc_vec(x0)
+            x0_vec.copy(x)
+            x0_vec.destroy()
+            self.ksp.setInitialGuessNonzero(True)
+        else:
+            self.ksp.setInitialGuessNonzero(False)
         try:
             self.ksp.solveTranspose(rhs_vec, x)
+            iters = self.ksp.getIterationNumber()
+            self.last_info = LinearSolverResultInfo(iterations=iters)
             result = petsc_vec_to_jax_array(x).copy()
             result.block_until_ready()
             return result

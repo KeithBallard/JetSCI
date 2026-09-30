@@ -5,6 +5,7 @@ jax.config.update("jax_enable_x64", True)
 import pathlib
 jax.config.update("jax_compilation_cache_dir", str(pathlib.Path(__file__).parent.resolve() / "__jax_cache__"))
 
+from .coo_data import COOData, to_coo_data
 from .options import *
 from .solve import *
 from .lifecycle import *
@@ -21,11 +22,14 @@ from .jax_linear import (
 from .jax_newton_raph import JAXNewtonRaphsonSolver
 
 __all__ = [
+    "COOData",
+    "to_coo_data",
     "NonlinearSolverType",
     "PreconditionerType",
     "LinearSolverType",
     "LinearSolverOptions",
     "SolverOptions",
+    "linear_solver",
     "differentiable_solve",
     "differentiable_linear_solve",
     "build_solver_with_reuse",

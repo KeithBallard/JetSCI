@@ -16,15 +16,7 @@ from ._primitives import buildKSP_Keith as _petsc_lifetime
 from ._primitives import differentiateKSP_Keith as _solve_primitive
 from ._primitives import runKSP_Keith as _raw_callbacks
 
-
-@dataclass(frozen=True)
-class COOData:
-    """JAX-visible COO data passed into level-3 methods."""
-
-    shape: jax.Array
-    vals: jax.Array
-    rows: jax.Array
-    cols: jax.Array
+from ..coo_data import COOData
 
 
 def to_COOData_object(jax_coo) -> COOData:

@@ -37,24 +37,7 @@ def _nvtx_range(name):
         with _cupy_time_range(name):
             yield
 
-
-@jax.tree_util.register_pytree_node_class
-@dataclass(frozen=True)
-class COOData:
-    """JAX-visible COO matrix data."""
-
-    shape: jax.Array
-    vals: jax.Array
-    rows: jax.Array
-    cols: jax.Array
-
-    def tree_flatten(self):
-        return (self.shape, self.vals, self.rows, self.cols), None
-
-    @classmethod
-    def tree_unflatten(cls, aux_data, children):
-        del aux_data
-        return cls(*children)
+from ..coo_data import COOData
 
 
 

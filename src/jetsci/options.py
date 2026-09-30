@@ -110,9 +110,9 @@ class SolverOptions(LinearSolverOptions):
     nonlinear_solver_type:  NonlinearSolverType
 
     nonlinear_max_iter:     int = 10
-    nonlinear_relative_tol: float = 1e-10
-    nonlinear_absolute_tol: float = 1e-8
-    nonlinear_step_tol:     float = 0.0
+    nonlinear_relative_tol: float = 1e-10 # Convergence if ||R(x)|| < absolute_tol * ||R(x_0)||
+    nonlinear_absolute_tol: float = 1e-8 # Convergence if ||R(x)|| < absolute_tol
+    nonlinear_step_tol:     float = 0.0 # Convergence if ||delta x|| < step_tol * ||x||
 
     def __post_init__(self):
         super().__post_init__()
