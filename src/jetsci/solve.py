@@ -142,7 +142,30 @@ def differentiable_linear_solve(
             "or provide an explicit sparse matrix (e.g., COOData or (rows, cols, vals, shape))."
         )
 
-    solver, updated_solver_options = build_linear_solver_with_reuse(solver_options, A_primal)
+    if type(solver_options) is LinearSolverOptions:
+        """If a linearSolverOptions is used we may need to create a new object, whereas if a solverOptions is used
+        we need to instead pull the KSP out of the SNES if one exists. These require different lifetime logic"""
+
+        solver, updated_solver_options = build_linear_solver_with_reuse(solver_options, A_primal)
+        linearFunction = solver.solve #This way we call whatever functions we actually use with the same boilerplate code
+
+    elif type(solver_options) is SolverOptions:
+        """If on the other hand a SolverOptions is used then, assuming there exists a SNES object we need to pull
+        the KSP from that SNES instead. If there is no key though we should probably throw an error because building
+        a SNES to just get a KSP is a waste of system resources"""
+
+        if solver_options.solver_key is None:
+            raise TypeError(
+                        "nonlinearSolverOptions' key and solver must have been created before using for linear solves."
+                        "Building a SNES just for linear solves negatively impacts performance."
+                        "Fix: If you are just doing linear solves it would be better to use linearSolverOptions or the KSP wrappers."
+                    )
+            
+        
+        #TODO: Extract the linear parts from the nonlinear solver object to line up with linear syntax   
+                                           #check call alignment
+        solver, updated_solver_options = build_solver_with_reuse(solver_options, b, A, x_linearized)
+        linearFunction = solver.KSP.solve #since we need the KSP and linear methods only we can fetch just the KSP related objects
 
     def _solve_core(x_lin_eval, *params_eval):
         A_val = A(x_lin_eval, *params_eval)
@@ -175,16 +198,18 @@ def differentiable_linear_solve(
             else:
                 A_matvec = lambda v: A_dense.T @ v
 
+
+        #TODO: investigate these callbacks
         def solve_fn(matvec_fn, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
             def _cb(r):
-                return solver.solve(r, transpose=transpose, x0=x_0)
+                return linearFunction(r, transpose=transpose, x0=x_0)
             return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
 
         def trans_solve_fn(matvec_fn, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
             def _cb(r):
-                return solver.solve(r, transpose=not transpose, x0=x_0)
+                return linearFunction(r, transpose=not transpose, x0=x_0)
             return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
 
         is_symmetric = (

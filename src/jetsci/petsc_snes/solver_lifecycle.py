@@ -205,7 +205,7 @@ def build_petsc_internal_ksp_from_options(options: SolverOptions):
         options=options,
     )
 
-
+#Maybe rename this to 'fetch' since it only builds if there's not one already in memory
 def build_petsc_solver_with_reuse(
     options: SolverOptions,
     R: jax.tree_util.Partial,
