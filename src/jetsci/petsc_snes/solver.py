@@ -382,6 +382,8 @@ class PETScNonlinearSolver:
         print("PETScNonlinearSolver solve: converting x0 JAX array to petscVec")
         x0_vec = jax_array_to_petsc_vec(x0)
 
+        print("!!!!!!!!!!!!!!!!!!!!!!!!! x passed to nonlinearsolver:",jnp.linalg.norm(x0))
+
         #DEBUG PRINT
         print("PETScNonlinearSolver solve: finished converting x0 to petscVec")
         

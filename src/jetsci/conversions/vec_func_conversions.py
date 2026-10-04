@@ -94,7 +94,8 @@ def jax_array_to_petsc_vec(values):
     vec = PETSc.Vec().createWithDLPack(values_cupy, size=values_cupy.size)
     #DEBUG PRINT
     if hasattr(vec, "getCUDAHandle"):
-        print(f"jax_array_to_petsc_vec: created PETSc Vec CUDA handle = {vec.getCUDAHandle()}")
+        pass
+        #print(f"jax_array_to_petsc_vec: created PETSc Vec CUDA handle = {vec.getCUDAHandle()}")
     return vec
 
 

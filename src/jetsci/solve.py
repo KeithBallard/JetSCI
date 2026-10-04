@@ -133,39 +133,30 @@ def differentiable_linear_solve(
     if isinstance(A_primal, tuple) and len(A_primal) == 4:
         A_primal = to_coo_data(A_primal)
 
+
+    #Reconsider if there's another way of doing this
     if callable(A_primal) and solver_options.linear_solver_type.is_petsc:
         raise TypeError(
             "PETSc linear solver cannot accept a callable operator. "
             "Callable operators cannot be converted to sparse matrices without evaluation loops (like jacfwd), "
-            "which destroys performance. "
+            "whichdestroys performance. "
             "Fix: Use a matrix-free iterative solver (e.g., LinearSolverType.JAX_CG_SCIPY, LinearSolverType.JAX_GMRES_SCIPY) "
             "or provide an explicit sparse matrix (e.g., COOData or (rows, cols, vals, shape))."
         )
 
     if type(solver_options) is LinearSolverOptions:
-        """If a linearSolverOptions is used we may need to create a new object, whereas if a solverOptions is used
-        we need to instead pull the KSP out of the SNES if one exists. These require different lifetime logic"""
-
         solver, updated_solver_options = build_linear_solver_with_reuse(solver_options, A_primal)
-        linearFunction = solver.solve #This way we call whatever functions we actually use with the same boilerplate code
-
+        fetchedLinearSolve = solver.solve 
     elif type(solver_options) is SolverOptions:
-        """If on the other hand a SolverOptions is used then, assuming there exists a SNES object we need to pull
-        the KSP from that SNES instead. If there is no key though we should probably throw an error because building
-        a SNES to just get a KSP is a waste of system resources"""
-
         if solver_options.solver_key is None:
             raise TypeError(
-                        "nonlinearSolverOptions' key and solver must have been created before using for linear solves."
-                        "Building a SNES just for linear solves negatively impacts performance."
-                        "Fix: If you are just doing linear solves it would be better to use linearSolverOptions or the KSP wrappers."
-                    )
-            
-        
-        #TODO: Extract the linear parts from the nonlinear solver object to line up with linear syntax   
-                                           #check call alignment
-        solver, updated_solver_options = build_solver_with_reuse(solver_options, b, A, x_linearized)
-        linearFunction = solver.KSP.solve #since we need the KSP and linear methods only we can fetch just the KSP related objects
+                "differentiable_linear_solve cannot be called using a solverOptions object without an already built solver."
+                "A solver key must be included, otherwise no linear solver can be used."
+                "Building a nonlinearSolver for just linear solves is terrible for performance. Please create a LinearSolverOptions instead"
+            )
+        else:
+            solver, updated_solver_options = build_solver_with_reuse(solver_options, A_primal)
+            fetchedLinearSolve = solver.linear_solve
 
     def _solve_core(x_lin_eval, *params_eval):
         A_val = A(x_lin_eval, *params_eval)
@@ -198,18 +189,17 @@ def differentiable_linear_solve(
             else:
                 A_matvec = lambda v: A_dense.T @ v
 
-
-        #TODO: investigate these callbacks
+        #TODO: These matvec_fn aren't being used, nor is the vmap looking quite right
         def solve_fn(matvec_fn, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
             def _cb(r):
-                return linearFunction(r, transpose=transpose, x0=x_0)
+                return fetchedLinearSolve(r, transpose=transpose, x0=x_0)
             return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
 
         def trans_solve_fn(matvec_fn, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
             def _cb(r):
-                return linearFunction(r, transpose=not transpose, x0=x_0)
+                return fetchedLinearSolve(r, transpose=not transpose, x0=x_0)
             return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
 
         is_symmetric = (
