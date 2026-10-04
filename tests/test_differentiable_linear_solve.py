@@ -13,7 +13,11 @@ from jetsci.options import (
     SolverOptions,
     NonlinearSolverType,
 )
-from jetsci.lifecycle import build_linear_solver_with_reuse, __linear_solver_dict
+from jetsci.lifecycle import (
+    build_linear_solver_with_reuse,
+    build_solver_with_reuse,
+    __linear_solver_dict,
+)
 
 
 @pytest.fixture
@@ -175,6 +179,37 @@ def test_differentiable_linear_solve_petsc_primal(linear_system):
     assert jnp.allclose(x, expected, atol=1e-5)
     assert updated_opts.solver_key is not None
     assert info is not None
+
+
+def test_differentiable_linear_solve_reuses_nonlinear_jax_solver(linear_system):
+    """A SolverOptions key follows the same differentiable linear API.
+
+    This exercises the nonlinear-solver branch without rebuilding it from the
+    linear operator. PETSc SNES follows the same public path, but requires the
+    GPU PETSc test environment.
+    """
+    A, b, expected = linear_system
+    opts = SolverOptions(
+        nonlinear_solver_type=NonlinearSolverType.JAX_NEWTON_RAPHSON,
+        linear_solver_type=LinearSolverType.JAX_CG_SCIPY,
+        linear_preconditioner_type=PreconditionerType.JAX_NONE,
+    )
+    _, opts = build_solver_with_reuse(
+        opts,
+        lambda x: A @ x - b,
+        lambda x: A,
+        jnp.zeros_like(b),
+    )
+
+    x, returned_opts, _ = jetsci.differentiable_linear_solve(
+        opts,
+        lambda x, *args: A,
+        lambda x, *args: b,
+        jnp.zeros_like(b),
+    )
+
+    assert returned_opts.solver_key == opts.solver_key
+    assert jnp.allclose(x, expected, atol=1e-5)
 
 
 def test_differentiable_linear_solve_jax_autodiff_params(linear_system):

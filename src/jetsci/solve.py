@@ -86,8 +86,9 @@ def differentiable_linear_solve(
     adjoints without unrolling solver iterations. Compatible with both JAX and PETSc backends.
 
     Parameters:
-        solver_options: LinearSolverOptions or SolverOptions specifying solver backend,
-            algorithm, tolerances, and optional solver_key.
+        solver_options: LinearSolverOptions for a standalone linear solver, or
+            SolverOptions with a solver_key from an already-built nonlinear
+            solver. Both sources use the same ``linear_solve`` protocol.
         A: Callable with signature A(x, *args) returning a callable matvec (v -> A @ v),
             COOData, (rows, cols, vals, shape) tuple, or dense array.
         b: Callable with signature b(x, *args) returning a 1D RHS array.
@@ -97,7 +98,9 @@ def differentiable_linear_solve(
         transpose: Whether to solve the transposed linear system.
 
     Returns:
-        tuple (x, updated_solver_options, info)
+        tuple (x, updated_solver_options, info). With SolverOptions, the
+        supplied A/b must describe the nonlinear solver's current
+        linearization; the existing nonlinear solver owns the native KSP.
     """
     if solver_options is None:
         raise ValueError(
@@ -144,19 +147,26 @@ def differentiable_linear_solve(
             "or provide an explicit sparse matrix (e.g., COOData or (rows, cols, vals, shape))."
         )
 
-    if type(solver_options) is LinearSolverOptions:
-        solver, updated_solver_options = build_linear_solver_with_reuse(solver_options, A_primal)
-        fetchedLinearSolve = solver.solve 
-    elif type(solver_options) is SolverOptions:
+    if isinstance(solver_options, SolverOptions):
         if solver_options.solver_key is None:
             raise TypeError(
-                "differentiable_linear_solve cannot be called using a solverOptions object without an already built solver."
-                "A solver key must be included, otherwise no linear solver can be used."
-                "Building a nonlinearSolver for just linear solves is terrible for performance. Please create a LinearSolverOptions instead"
+                "differentiable_linear_solve with SolverOptions requires an "
+                "already-built nonlinear solver (solver_key is missing). Use "
+                "LinearSolverOptions to create a standalone KSP/JAX solver."
             )
+        if solver_options.nonlinear_solver_type.is_petsc:
+            from .petsc_snes.solver_lifecycle import get_petsc_solver_objects_from_key
+
+            solver, _ = get_petsc_solver_objects_from_key(solver_options.solver_key)
         else:
-            solver, updated_solver_options = build_solver_with_reuse(solver_options, A_primal)
-            fetchedLinearSolve = solver.linear_solve
+            from .jax_newton_raph.solver import get_jax_solver_from_key
+
+            solver = get_jax_solver_from_key(solver_options.solver_key)
+        updated_solver_options = solver_options
+    else:
+        solver, updated_solver_options = build_linear_solver_with_reuse(
+            solver_options, A_primal
+        )
 
     def _solve_core(x_lin_eval, *params_eval):
         A_val = A(x_lin_eval, *params_eval)
@@ -192,15 +202,29 @@ def differentiable_linear_solve(
         #TODO: These matvec_fn aren't being used, nor is the vmap looking quite right
         def solve_fn(matvec_fn, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
-            def _cb(r):
-                return fetchedLinearSolve(r, transpose=transpose, x0=x_0)
-            return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
+            def _cb(r, x_linearized_cb):
+                return solver.linear_solve(
+                    r,
+                    x_linearized=x_linearized_cb,
+                    x_0=x_0,
+                    transpose=transpose,
+                )
+            return jax.pure_callback(
+                _cb, res_info, rhs, x_lin_eval, vmap_method="sequential"
+            )
 
         def trans_solve_fn(matvec_fn, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
-            def _cb(r):
-                return fetchedLinearSolve(r, transpose=not transpose, x0=x_0)
-            return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
+            def _cb(r, x_linearized_cb):
+                return solver.linear_solve(
+                    r,
+                    x_linearized=x_linearized_cb,
+                    x_0=x_0,
+                    transpose=not transpose,
+                )
+            return jax.pure_callback(
+                _cb, res_info, rhs, x_lin_eval, vmap_method="sequential"
+            )
 
         is_symmetric = (
             solver_options.linear_solver_type in (
@@ -281,13 +305,17 @@ def differentiable_solve(
         def solve_fn(matvec, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
             def _cb(r):
-                return solver.linear_solve(r, x_star=x_star, transpose=False)
+                return solver.linear_solve(
+                    r, x_linearized=x_star, transpose=False
+                )
             return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
 
         def trans_solve_fn(matvec, rhs):
             res_info = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
             def _cb(r):
-                return solver.linear_solve(r, x_star=x_star, transpose=True)
+                return solver.linear_solve(
+                    r, x_linearized=x_star, transpose=True
+                )
             return jax.pure_callback(_cb, res_info, rhs, vmap_method="sequential")
 
         is_symmetric = (
@@ -321,4 +349,3 @@ def differentiable_solve(
 
     x_solution = _solve_core(*args)
     return x_solution, solver_options
-    

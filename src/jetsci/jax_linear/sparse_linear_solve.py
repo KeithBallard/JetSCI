@@ -663,6 +663,24 @@ class JAXLinearSolver:
         self.last_info = info
         return x
 
+    def linear_solve(
+        self,
+        rhs: jnp.ndarray,
+        *,
+        x_linearized: jnp.ndarray | None = None,
+        x_0: jnp.ndarray | None = None,
+        transpose: bool = False,
+    ) -> jnp.ndarray:
+        """Solve with the common differentiable-linear-solve protocol.
+
+        ``x_linearized`` is accepted so standalone KSP/JAX solvers can be
+        called through the same interface as a nonlinear solver's current
+        linearization. A standalone operator is already bound to this solver,
+        so it is intentionally unused here.
+        """
+        del x_linearized
+        return self.solve(rhs, transpose=transpose, x0=x_0)
+
     def update_operator(self, A: Any) -> JAXLinearSolver:
         """Update operator values, checking shape and sparsity pattern."""
         if isinstance(A, tuple) and len(A) == 4:

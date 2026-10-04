@@ -106,19 +106,25 @@ class JAXNewtonRaphsonSolver:
     def linear_solve(
         self,
         rhs: jnp.ndarray,
-        x_star: jnp.ndarray | None = None,
+        *,
+        x_linearized: jnp.ndarray | None = None,
+        x_0: jnp.ndarray | None = None,
         transpose: bool = False,
     ) -> jnp.ndarray:
-        """Perform linear solve J(x*) dx = rhs (or J(x*)^T lam = rhs) for IFT differentiation."""
+        """Solve the Jacobian at ``x_linearized`` with the common protocol."""
+        del x_0
         R = self.residual_func
         J = self.jacobian_func
         opts = self.options
 
-        if x_star is None:
-            raise ValueError("x_star (solution point) is required for linear_solve in IFT")
+        if x_linearized is None:
+            raise ValueError(
+                "x_linearized (solution point) is required for linear_solve "
+                "on a nonlinear JAX solver"
+            )
 
         if J is not None:
-            J_op = J(x_star)
+            J_op = J(x_linearized)
         else:
             if opts.linear_solver_type in (
                 LinearSolverType.JAX_DENSE_INVERSE_JNP,
@@ -126,10 +132,10 @@ class JAXNewtonRaphsonSolver:
                 LinearSolverType.JAX_LU_CUPY,
                 LinearSolverType.JAX_SPSOLVE_PYPARDISO,
             ):
-                J_mat = jax.jacfwd(R)(x_star)
+                J_mat = jax.jacfwd(R)(x_linearized)
                 J_op = J_mat
             else:
-                J_op = lambda v: jax.jvp(R, (x_star,), (v,))[1]
+                J_op = lambda v: jax.jvp(R, (x_linearized,), (v,))[1]
 
         sol, _ = linear_solve(
             J_op,
@@ -146,6 +152,14 @@ class JAXNewtonRaphsonSolver:
 
 __jax_solver_dict: dict[int, JAXNewtonRaphsonSolver] = {}
 __jax_solver_id = 0
+
+
+def get_jax_solver_from_key(solver_key: int) -> JAXNewtonRaphsonSolver:
+    """Return an already-built nonlinear JAX solver by its lifecycle key."""
+    try:
+        return __jax_solver_dict[solver_key]
+    except KeyError as exc:
+        raise KeyError(f"No JAX solver found for solver_key={solver_key}") from exc
 
 
 def _new_jax_solver_key() -> int:

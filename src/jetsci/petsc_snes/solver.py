@@ -236,9 +236,21 @@ class PETScLinearSolver:
             return self.solve_transpose_to_jax(rhs, x0=x0)
         return self.solve_to_jax(rhs, x0=x0)
 
-    def linear_solve(self, rhs: jnp.ndarray, transpose: bool = False):
-        """Solve with this KSP object and return a JAX array."""
-        return self.solve(rhs, transpose=transpose)
+    def linear_solve(
+        self,
+        rhs: jnp.ndarray,
+        *,
+        x_linearized: jnp.ndarray | None = None,
+        x_0: jnp.ndarray | None = None,
+        transpose: bool = False,
+    ) -> jnp.ndarray:
+        """Solve with the common differentiable-linear-solve protocol.
+
+        The standalone KSP already owns its operator, so ``x_linearized`` is
+        accepted for interface compatibility but does not alter the solve.
+        """
+        del x_linearized
+        return self.solve(rhs, transpose=transpose, x0=x_0)
 
     def transpose_linear_solve(self, rhs: jnp.ndarray):
         """Solve adjoint problem with this KSP object and return a JAX array."""
@@ -248,7 +260,7 @@ class PETScLinearSolver:
         """Solve and explicitly copy the PETSc Vec result into a JAX array."""
         self._ensure_size(rhs)
         rhs_vec = jax_array_to_petsc_vec(rhs)
-        x = self.working_vector if self.working_vector is not None else rhs_vec.duplicate()
+        x = self.working_vector if self.working_vector is not None else rhs_vec.duplicate() #TODO it refactored working vector, check that it did so correctly
         if x0 is not None:
             x0_vec = jax_array_to_petsc_vec(x0)
             x0_vec.copy(x)
@@ -365,7 +377,7 @@ class PETScNonlinearSolver:
             self.workingVector.setUp()
 
     def solve(self, x0: jnp.ndarray):
-        """Solve with this SNES object and return a PETSc Vec.
+        """Solve nonlinear problem with this SNES object and return a PETSc Vec.
 
         The caller owns the returned Vec and is responsible for destroying it.
         """
@@ -467,14 +479,31 @@ class PETScNonlinearSolver:
     def linear_solve(
         self,
         rhs: jnp.ndarray,
-        x_star: jnp.ndarray | None = None,
+        *,
+        x_linearized: jnp.ndarray | None = None,
+        x_0: jnp.ndarray | None = None,
         transpose: bool = False,
     ) -> jnp.ndarray:
-        """Perform linear solve J(x*) dx = rhs (or J(x*)^T lam = rhs) for IFT differentiation."""
+        """Solve with this SNES object's current KSP linearization.
+
+        ``x_linearized`` names the state at which the SNES Jacobian was
+        assembled. The PETSc operator is already owned by SNES, so the value
+        is not recomputed here. ``x_0`` is an optional KSP initial guess.
+        """
+        del x_linearized
         ksp = self.snes.getKSP()
         rhs_vec = jax_array_to_petsc_vec(rhs)
         out_vec = rhs_vec.duplicate()
         try:
+            if x_0 is None:
+                ksp.setInitialGuessNonzero(False)
+            else:
+                x0_vec = jax_array_to_petsc_vec(x_0)
+                try:
+                    x0_vec.copy(out_vec)
+                finally:
+                    x0_vec.destroy()
+                ksp.setInitialGuessNonzero(True)
             if transpose:
                 ksp.solveTranspose(rhs_vec, out_vec)
             else:
