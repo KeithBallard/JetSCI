@@ -379,7 +379,9 @@ class PETScNonlinearSolver:
     def solve(self, x0: jnp.ndarray):
         """Solve nonlinear problem with this SNES object and return a PETSc Vec.
 
-        The caller owns the returned Vec and is responsible for destroying it.
+        The returned Vec is the solver-owned persistent working vector. It
+        remains valid until :meth:`destroy` is called, and callers must not
+        destroy it.
         """
 
         #DEBUG PRINT
@@ -461,20 +463,15 @@ class PETScNonlinearSolver:
         print("PETScNonlinearSolver solve_to_jax: completed solve call")
 
 
-        try:
-
-            #DEBUG PRINT
-            print("PETScNonlinearSolver solve_to_jax: starting petsc_vec_to_jax_array.copy()")
-
-            result = petsc_vec_to_jax_array(x).copy()
-
-            #DEBUG PRINT
-            print("PETScNonlinearSolver solve_to_jax: finished petsc_vec_to_jax_array.copy()")
-
-            result.block_until_ready()
-            return result
-        finally:
-            x.destroy()
+        # ``x`` is ``self.workingVector``. Copy its contents into JAX-owned
+        # storage, but retain the PETSc Vec for the next load increment.
+        # Destroying it here leaves a dangling Python PETSc handle that
+        # segfaults the next time ``_ensure_size`` accesses the vector.
+        print("PETScNonlinearSolver solve_to_jax: starting petsc_vec_to_jax_array.copy()")
+        result = petsc_vec_to_jax_array(x).copy()
+        print("PETScNonlinearSolver solve_to_jax: finished petsc_vec_to_jax_array.copy()")
+        result.block_until_ready()
+        return result
 
     def linear_solve(
         self,
@@ -518,11 +515,12 @@ class PETScNonlinearSolver:
     def cleanup_work_vectors(self):
         """Destroy residual/Jacobian objects that depend on vector size."""
 
-
-
         if self.residual_vec is not None:
             self.residual_vec.destroy()
             self.residual_vec = None
+        if self.workingVector is not None:
+            self.workingVector.destroy()
+            self.workingVector = None
         if self.jacobian_mat is not None:
             self.jacobian_mat.destroy()
             self.jacobian_mat = None
