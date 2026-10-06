@@ -103,14 +103,32 @@ def assign_petsc_vec_from_jax(vec, values):
     """Assign a JAX vector result into an existing PETSc Vec on device.
 
     This performs a device-to-device assignment from JAX-owned result storage
-    into PETSc-owned output Vec storage. It does not use `buffer_callback` and
-    does not intentionally stage through host memory.
+    into PETSc-owned output Vec storage when ``values`` is device-resident.
+    ``jax.pure_callback`` invokes its Python callback with host arrays, so the
+    helper also has an explicit CPU fallback for that boundary.
     """
     import cupy as cp
 
     with _nvtx_range("snes_direct_vec_values_ready_and_dlpack"):
-        values.block_until_ready()
-        values_cupy = cp.from_dlpack(values, copy=False)
+        if hasattr(values, "block_until_ready"):
+            values.block_until_ready()
+
+        dlpack_device = None
+        if hasattr(values, "__dlpack_device__"):
+            try:
+                dlpack_device = values.__dlpack_device__()
+            except Exception:
+                pass
+
+        # DLPack device type 1 is CPU.  ``pure_callback`` supplies NumPy/CPU
+        # values here, for which CuPy's from_dlpack intentionally raises.
+        if dlpack_device is not None and dlpack_device[0] == 1:
+            values_cupy = cp.asarray(np.asarray(values))
+        else:
+            try:
+                values_cupy = cp.from_dlpack(values, copy=False)
+            except (TypeError, ValueError):
+                values_cupy = cp.asarray(np.asarray(values))
         #DEBUG PRINT
         print(f"assign_petsc_vec_from_jax: values CuPy ptr = {values_cupy.data.ptr}")
 
