@@ -405,6 +405,9 @@ class PETScNonlinearSolver:
         The returned Vec is the solver-owned persistent working vector. It
         remains valid until :meth:`destroy` is called, and callers must not
         destroy it.
+        The returned Vec is the solver-owned persistent working vector. It
+        remains valid until :meth:`destroy` is called, and callers must not
+        destroy it.
         """
 
         #DEBUG PRINT
@@ -463,6 +466,15 @@ class PETScNonlinearSolver:
         print("PETScNonlinearSolver solve_to_jax: completed solve call")
 
 
+        # ``x`` is ``self.workingVector``. Copy its contents into JAX-owned
+        # storage, but retain the PETSc Vec for the next load increment.
+        # Destroying it here leaves a dangling Python PETSc handle that
+        # segfaults the next time ``_ensure_size`` accesses the vector.
+        print("PETScNonlinearSolver solve_to_jax: starting petsc_vec_to_jax_array.copy()")
+        result = petsc_vec_to_jax_array(x).copy()
+        print("PETScNonlinearSolver solve_to_jax: finished petsc_vec_to_jax_array.copy()")
+        result.block_until_ready()
+        return result
         # ``x`` is ``self.workingVector``. Copy its contents into JAX-owned
         # storage, but retain the PETSc Vec for the next load increment.
         # Destroying it here leaves a dangling Python PETSc handle that
