@@ -59,7 +59,7 @@ def _coo_jacobian_function(R: Callable, J: Callable | None):
 
 
     #DEBUG PRINT
-    print("starting _coo_jacobian_function in lifecycle")
+    #print("starting _coo_jacobian_function in lifecycle")
 
     if J is None:
         warnings.warn(
@@ -83,7 +83,7 @@ def _coo_jacobian_function(R: Callable, J: Callable | None):
     def jacobian_coo(x):
 
         #DEBUG PRINT
-        print("calling jacobian_coo converted function")
+        #print("calling jacobian_coo converted function")
 
         jacobian = J(x)
         if all(hasattr(jacobian, field) for field in ("shape", "vals", "rows", "cols")):
@@ -106,14 +106,14 @@ def _coo_jacobian_function(R: Callable, J: Callable | None):
         return convert_jax_mat_to_coo_data(jacobian)
 
     #DEBUG PRINT
-    print("completed _coo_jacobian_function conversion")
+    #print("completed _coo_jacobian_function conversion")
 
     return jacobian_coo
 
 
 def _apply_snes_options(snes, options: SolverOptions):
     #DEBUG PRINT
-    print("calling solver_lifecycle _apply_snes_options")
+    #print("calling solver_lifecycle _apply_snes_options")
     snes.setTolerances(
         rtol=options.nonlinear_relative_tol,
         atol=options.nonlinear_absolute_tol,
@@ -124,7 +124,7 @@ def _apply_snes_options(snes, options: SolverOptions):
 
 def _apply_ksp_options(snes, options: SolverOptions):
     #DEBUG PRINT
-    print("calling solver_lifecycle _apply_ksp_options")
+    #print("calling solver_lifecycle _apply_ksp_options")
     ksp = snes.getKSP()
     ksp.setType(_PETSC_KSP_TYPES[options.linear_solver_type])
     if hasattr(PETSc.KSP, "NormType"):

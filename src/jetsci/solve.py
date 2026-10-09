@@ -264,6 +264,54 @@ def differentiable_solve(
     """
     x_0 = jnp.asarray(x_0)
 
+    # The PETSc SNES companion primitive owns the same live SNES/KSP pair as
+    # the public solver, but keeps its linear applications on the device via
+    # ``buffer_callback``.  In particular, a rank-2 RHS is forwarded as a
+    # PETSc dense matrix to ``KSP.matSolve`` instead of being expanded into a
+    # sequence of host-staged ``pure_callback`` calls.
+    #
+    # Its current primitive boundary is ``solve(phi, x0)`` (one array
+    # parameter), whereas the public API permits arbitrary ``*args``.  Route
+    # only the compatible PETSc case for now; the generic implementation below
+    # remains the fallback for JAX solvers and multi-argument public calls.
+    if (
+        args
+        and len(args) == 1
+        and solver_options.nonlinear_solver_type.is_petsc
+    ):
+        from .petsc_snes.differentiable_snes import (
+            DifferentiableSNESPrimitive,
+            make_differentiable_snes_solve,
+        )
+
+        phi = args[0]
+        phi_stopped = jax.lax.stop_gradient(phi)
+        R_primal = jax.tree_util.Partial(R, phi_stopped)
+        J_primal = (
+            None
+            if J_x is None
+            else jax.tree_util.Partial(J_x, phi_stopped)
+        )
+        _, updated_options = build_solver_with_reuse(
+            solver_options,
+            R_primal,
+            J_primal,
+            x_0,
+        )
+        if updated_options.solver_key is None:
+            raise RuntimeError(
+                "PETSc differentiable_solve did not receive a solver_key "
+                "while building its companion KSP."
+            )
+
+        primitive = DifferentiableSNESPrimitive(
+            residual=R,
+            solver_key=updated_options.solver_key,
+            jacobian=J_x,
+        )
+        solve_with_companion_ksp = make_differentiable_snes_solve(primitive)
+        return solve_with_companion_ksp(phi, x_0), updated_options
+
     if not args:
         R_bar = jax.tree_util.Partial(R)
         J_bar = None if J_x is None else jax.tree_util.Partial(J_x)
