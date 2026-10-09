@@ -136,7 +136,7 @@ def _hooks_from_solver_key(
     snes_solver, ksp_solver = get_petsc_solver_objects_from_key(solver_key)
 
     #DEBUG PRINT
-    print(f"differentiable_snes _hooks_from_solver_key started solver_key={solver_key}")
+    #print(f"differentiable_snes _hooks_from_solver_key started solver_key={solver_key}")
     #DEBUG PRINT
     if getattr(snes_solver, "jacobian_mat", None) is not None:
         print(f"differentiable_snes _hooks_from_solver_key: SNES jacobian_mat handle = {int(snes_solver.jacobian_mat.handle)}")
@@ -148,10 +148,10 @@ def _hooks_from_solver_key(
         # objects and their allocated storage.
 
         #DEBUG PRINT
-        print(
-            "differentiable_snes nonlinear_solve: refreshing callbacks "
-            f"phi_shape={getattr(phi, 'shape', None)} x0_shape={getattr(x0, 'shape', None)}"
-        )
+        #print(
+        #    "differentiable_snes nonlinear_solve: refreshing callbacks "
+        #    f"phi_shape={getattr(phi, 'shape', None)} x0_shape={getattr(x0, 'shape', None)}"
+        #)
 
         residual_for_phi = jax.tree_util.Partial(primitive.residual, phi)
         if primitive.jacobian is not None:
@@ -172,7 +172,7 @@ def _hooks_from_solver_key(
         if _JVP_DIAGNOSTICS:
             print("JVP SNES callback refresh:", refresh_time)
         #DEBUG PRINT
-        print("differentiable_snes nonlinear_solve: calling SNES solve_to_jax")
+        #print("differentiable_snes nonlinear_solve: calling SNES solve_to_jax")
         return snes_solver.solve_to_jax(x0)
 
     
@@ -180,20 +180,20 @@ def _hooks_from_solver_key(
     def _linear_solve_callback(ctx, out, rhs):
 
         #DEBUG PRINT
-        print("differentiable_snes _linear_solve_callback called")
+        #print("differentiable_snes _linear_solve_callback called")
 
         GPUPointerArray = cp.from_dlpack(rhs,copy=False)
         #DEBUG PRINT
-        print(
-            "differentiable_snes _linear_solve_callback: rhs CuPy ptr = "
-            f"{GPUPointerArray.data.ptr}, shape={GPUPointerArray.shape}, dtype={GPUPointerArray.dtype}"
-        )
+        #print(
+        #    "differentiable_snes _linear_solve_callback: rhs CuPy ptr = "
+        #    f"{GPUPointerArray.data.ptr}, shape={GPUPointerArray.shape}, dtype={GPUPointerArray.dtype}"
+        #)
         #DEBUG PRINT
         out_cupy = cp.asarray(out)
-        print(
-            "differentiable_snes _linear_solve_callback: out CuPy ptr = "
-            f"{out_cupy.data.ptr}, shape={out_cupy.shape}, dtype={out_cupy.dtype}"
-        )
+        #print(
+        #    "differentiable_snes _linear_solve_callback: out CuPy ptr = "
+        #    f"{out_cupy.data.ptr}, shape={out_cupy.shape}, dtype={out_cupy.dtype}"
+        #)
         #print("cupy array",GPUPointerArray)
 
         #print("working shape",GPUPointerArray.ndim)
@@ -241,19 +241,19 @@ def _hooks_from_solver_key(
     def _linear_solve_callback_block(ctx, out, rhs_block: jnp.ndarray):
 
         #DEBUG PRINT
-        print("differentiable_snes _linear_solve_callback_block called")
+        #print("differentiable_snes _linear_solve_callback_block called")
 
         GPUPointerArray = cp.from_dlpack(rhs_block,copy=False)
         #DEBUG PRINT
-        print(
-            "differentiable_snes _linear_solve_callback_block: rhs_block CuPy ptr = "
-            f"{GPUPointerArray.data.ptr}, shape={GPUPointerArray.shape}, dtype={GPUPointerArray.dtype}"
-        )
+        #print(
+        #    "differentiable_snes _linear_solve_callback_block: rhs_block CuPy ptr = "
+        #    f"{GPUPointerArray.data.ptr}, shape={GPUPointerArray.shape}, dtype={GPUPointerArray.dtype}"
+        #)
 
         rhs_petsc = PETSc.Vec().createWithDLPack(GPUPointerArray, size=rhs_block.shape[0])
         #DEBUG PRINT
-        if hasattr(rhs_petsc, "getCUDAHandle"):
-            print(f"differentiable_snes _linear_solve_callback_block: rhs_petsc CUDA handle = {rhs_petsc.getCUDAHandle()}")
+        #if hasattr(rhs_petsc, "getCUDAHandle"):
+        #    print(f"differentiable_snes _linear_solve_callback_block: rhs_petsc CUDA handle = {rhs_petsc.getCUDAHandle()}")
         
         #rhs_petsc.view()
 
@@ -266,17 +266,17 @@ def _hooks_from_solver_key(
         # TODO: remove the NumPy bridge once the solver-key linear solve path
         # can stay device-native end to end.
         #DEBUG PRINT
-        print(
-            "differentiable_snes _transpose_linear_solve_callback called "
-            f"rhs_shape={getattr(rhs, 'shape', None)}"
-        )
+        #print(
+        #    "differentiable_snes _transpose_linear_solve_callback called "
+        #    f"rhs_shape={getattr(rhs, 'shape', None)}"
+        #)
         return np.asarray(ksp_solver.solve_transpose_to_jax(rhs))
 
     
     def _ksp_linear_solve_buffer_callback(rhs):
         rhs = jnp.asarray(rhs)
         #DEBUG PRINT
-        print(f"differentiable_snes _ksp_linear_solve_buffer_callback: rhs shape = {rhs.shape}")
+        #print(f"differentiable_snes _ksp_linear_solve_buffer_callback: rhs shape = {rhs.shape}")
         result_shape = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
         
         return buffer_callback(
@@ -288,7 +288,7 @@ def _hooks_from_solver_key(
     def _ksp_transpose_linear_solve_single_rhs(rhs):
         rhs = jnp.asarray(rhs)
         #DEBUG PRINT
-        print(f"differentiable_snes _ksp_transpose_linear_solve_single_rhs: rhs shape = {rhs.shape}")
+        #print(f"differentiable_snes _ksp_transpose_linear_solve_single_rhs: rhs shape = {rhs.shape}")
         result_shape = jax.ShapeDtypeStruct(rhs.shape, rhs.dtype)
         return buffer_callback(
             _transpose_linear_solve_callback,
@@ -300,10 +300,10 @@ def _hooks_from_solver_key(
     def ksp_linear_solve(x_star, phi, rhs):
         del x_star, phi
         #DEBUG PRINT
-        print(f"differentiable_snes ksp_linear_solve called rhs_shape={getattr(rhs, 'shape', None)}")
+        #print(f"differentiable_snes ksp_linear_solve called rhs_shape={getattr(rhs, 'shape', None)}")
         if snes_solver.jacobian_mat is not None:
             #DEBUG PRINT
-            print(f"differentiable_snes ksp_linear_solve: updating KSP operator handle = {int(snes_solver.jacobian_mat.handle)}")
+            #print(f"differentiable_snes ksp_linear_solve: updating KSP operator handle = {int(snes_solver.jacobian_mat.handle)}")
             ksp_solver.update_operator(snes_solver.jacobian_mat)
         rhs = jnp.asarray(rhs)
         return _ksp_linear_solve_buffer_callback(rhs)
@@ -313,10 +313,10 @@ def _hooks_from_solver_key(
     def ksp_transpose_linear_solve(x_star, phi, rhs):
         del x_star, phi
         #DEBUG PRINT
-        print(f"differentiable_snes ksp_transpose_linear_solve called rhs_shape={getattr(rhs, 'shape', None)}")
+        #print(f"differentiable_snes ksp_transpose_linear_solve called rhs_shape={getattr(rhs, 'shape', None)}")
         if snes_solver.jacobian_mat is not None:
             #DEBUG PRINT
-            print(f"differentiable_snes ksp_transpose_linear_solve: updating KSP operator handle = {int(snes_solver.jacobian_mat.handle)}")
+            #print(f"differentiable_snes ksp_transpose_linear_solve: updating KSP operator handle = {int(snes_solver.jacobian_mat.handle)}")
             ksp_solver.update_operator(snes_solver.jacobian_mat)
         rhs = jnp.asarray(rhs)
         if rhs.ndim == 1:
@@ -356,7 +356,7 @@ def unregister_primitive_context(solver_key: int) -> None:
 
 def _differentiable_snes_solve_impl(phi, x0, *, solver_key: int):
     #DEBUG PRINT
-    print(f"differentiable_snes _differentiable_snes_solve_impl called solver_key={solver_key}")
+    #print(f"differentiable_snes _differentiable_snes_solve_impl called solver_key={solver_key}")
 
     primitive = _primitive_context(solver_key)
     if primitive.solver_key is not None and primitive.solver_key != solver_key:
@@ -384,11 +384,11 @@ def _differentiable_snes_solve_jvp(primals, tangents, *, solver_key: int):
     phi_dot, _x0_dot = tangents
 
     #DEBUG PRINT
-    print(
-        "differentiable_snes _differentiable_snes_solve_jvp called "
-        f"solver_key={solver_key} phi_shape={getattr(phi, 'shape', None)} "
-        f"x0_shape={getattr(x0, 'shape', None)}"
-    )
+    #print(
+    #    "differentiable_snes _differentiable_snes_solve_jvp called "
+    #    f"solver_key={solver_key} phi_shape={getattr(phi, 'shape', None)} "
+    #    f"x0_shape={getattr(x0, 'shape', None)}"
+    #)
 
     jax.debug.print("we're in here actually")
 
@@ -409,7 +409,7 @@ def _differentiable_snes_solve_jvp(primals, tangents, *, solver_key: int):
 
     if _is_zero(phi_dot):
         #DEBUG PRINT
-        print("differentiable_snes _differentiable_snes_solve_jvp: phi_dot is zero")
+        #print("differentiable_snes _differentiable_snes_solve_jvp: phi_dot is zero")
         return x_star, _zero_from_value(x_star)
 
     residual_at_solution = jax.tree_util.Partial(primitive.residual, x=x_star)
@@ -425,10 +425,10 @@ def _differentiable_snes_solve_jvp(primals, tangents, *, solver_key: int):
 
     linear_start = perf_counter()
     #DEBUG PRINT
-    print(
-        "differentiable_snes _differentiable_snes_solve_jvp: calling linear_solve "
-        f"rhs_shape={getattr(residual_phi_dot, 'shape', None)}"
-    )
+    #print(
+    #    "differentiable_snes _differentiable_snes_solve_jvp: calling linear_solve "
+    #    f"rhs_shape={getattr(residual_phi_dot, 'shape', None)}"
+    #)
     x_dot = linear_solve(x_star, phi, -residual_phi_dot)
     _block_if_ready(x_dot)
     linear_time = perf_counter() - linear_start
@@ -450,10 +450,10 @@ def _differentiable_snes_solve_jvp(primals, tangents, *, solver_key: int):
 
 def _differentiable_snes_solve_transpose(ct, phi, x0, *, solver_key: int):
     #DEBUG PRINT
-    print(
-        "differentiable_snes _differentiable_snes_solve_transpose called "
-        f"solver_key={solver_key} ct_shape={getattr(ct, 'shape', None)}"
-    )
+    #print(
+    #    "differentiable_snes _differentiable_snes_solve_transpose called "
+    #    f"solver_key={solver_key} ct_shape={getattr(ct, 'shape', None)}"
+    #)
 
     primitive = _primitive_context(solver_key)
     nonlinear_solve, _, transpose_linear_solve = _hooks_from_solver_key(
@@ -498,7 +498,7 @@ def make_differentiable_snes_solve(primitive: DifferentiableSNESPrimitive):
 
     if primitive.solver_key is not None:
         #DEBUG PRINT
-        print(f"differentiable_snes make_differentiable_snes_solve: registering solver_key={primitive.solver_key}")
+        #print(f"differentiable_snes make_differentiable_snes_solve: registering solver_key={primitive.solver_key}")
         _register_primitive_context(primitive)
         solver_key = primitive.solver_key
 

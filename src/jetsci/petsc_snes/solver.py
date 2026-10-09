@@ -256,15 +256,57 @@ class PETScLinearSolver:
         """Solve adjoint problem with this KSP object and return a JAX array."""
         return self.solve(rhs, transpose=True)
 
+    def solve_from_device_buffers(
+        self,
+        out,
+        rhs,
+        *,
+        transpose: bool = False,
+        x0=None,
+    ) -> None:
+        """Solve directly between JAX GPU callback buffers and PETSc Vec views.
+
+        ``buffer_callback`` supplies device buffers here, unlike
+        ``pure_callback`` which supplies NumPy arrays.  The short-lived PETSc
+        Vec objects only wrap caller-owned device memory; no vector values are
+        copied through host memory or an intermediate PETSc allocation.
+        """
+        import cupy as cp
+
+        rhs_cupy = cp.from_dlpack(rhs, copy=False)
+        out_cupy = cp.asarray(out)
+        rhs_vec = PETSc.Vec().createWithDLPack(rhs_cupy, size=rhs_cupy.size)
+        out_vec = PETSc.Vec().createWithDLPack(out_cupy, size=out_cupy.size)
+        try:
+            if x0 is None:
+                self.ksp.setInitialGuessNonzero(False)
+            else:
+                out_cupy[...] = cp.from_dlpack(x0, copy=False)
+                self.ksp.setInitialGuessNonzero(True)
+            if transpose:
+                self.ksp.solveTranspose(rhs_vec, out_vec)
+            else:
+                self.ksp.solve(rhs_vec, out_vec)
+            self.last_info = LinearSolverResultInfo(
+                iterations=self.ksp.getIterationNumber()
+            )
+        finally:
+            out_vec.destroy()
+            rhs_vec.destroy()
+
     def solve_to_jax(self, rhs: jnp.ndarray, x0: jnp.ndarray | None = None) -> jnp.ndarray:
         """Solve and explicitly copy the PETSc Vec result into a JAX array."""
         self._ensure_size(rhs)
-        rhs_vec = jax_array_to_petsc_vec(rhs)
-        x = self.working_vector if self.working_vector is not None else rhs_vec.duplicate() #TODO it refactored working vector, check that it did so correctly
+        # Reuse solver-owned CUDA storage for the RHS rather than creating a
+        # temporary PETSc Vec for every KSP application.
+        rhs_vec = self.vector_data
+        if rhs_vec is None:
+            rhs_vec = jax_array_to_petsc_vec(rhs)
+        else:
+            assign_petsc_vec_from_jax(rhs_vec, rhs)
+        x = self.working_vector if self.working_vector is not None else rhs_vec.duplicate()
         if x0 is not None:
-            x0_vec = jax_array_to_petsc_vec(x0)
-            x0_vec.copy(x)
-            x0_vec.destroy()
+            assign_petsc_vec_from_jax(x, x0)
             self.ksp.setInitialGuessNonzero(True)
         else:
             self.ksp.setInitialGuessNonzero(False)
@@ -276,19 +318,22 @@ class PETScLinearSolver:
             result.block_until_ready()
             return result
         finally:
-            rhs_vec.destroy()
+            if rhs_vec is not self.vector_data:
+                rhs_vec.destroy()
             if self.working_vector is None:
                 x.destroy()
 
     def solve_transpose_to_jax(self, rhs: jnp.ndarray, x0: jnp.ndarray | None = None) -> jnp.ndarray:
         """Solve transpose and explicitly copy the PETSc Vec result into a JAX array."""
         self._ensure_size(rhs)
-        rhs_vec = jax_array_to_petsc_vec(rhs)
+        rhs_vec = self.vector_data
+        if rhs_vec is None:
+            rhs_vec = jax_array_to_petsc_vec(rhs)
+        else:
+            assign_petsc_vec_from_jax(rhs_vec, rhs)
         x = self.working_vector if self.working_vector is not None else rhs_vec.duplicate()
         if x0 is not None:
-            x0_vec = jax_array_to_petsc_vec(x0)
-            x0_vec.copy(x)
-            x0_vec.destroy()
+            assign_petsc_vec_from_jax(x, x0)
             self.ksp.setInitialGuessNonzero(True)
         else:
             self.ksp.setInitialGuessNonzero(False)
@@ -300,7 +345,8 @@ class PETScLinearSolver:
             result.block_until_ready()
             return result
         finally:
-            rhs_vec.destroy()
+            if rhs_vec is not self.vector_data:
+                rhs_vec.destroy()
             if self.working_vector is None:
                 x.destroy()
 
@@ -346,22 +392,28 @@ class PETScNonlinearSolver:
 
     #this is to avoid that recasting error Chennie was getting
     workingVector: object | None = None 
+    # Reused by implicit-differentiation KSP solves.  They are separate from
+    # ``workingVector`` because PETSc may read the RHS while overwriting x.
+    linear_rhs_vec: object | None = None
+    linear_out_vec: object | None = None
 
     def __post_init__(self):
         """Setup snes and Mat/Vec."""
 
         #DEBUG PRINT
-        print("PETScNonlinearSolver __post_init__ called")
+        #print("PETScNonlinearSolver __post_init__ called")
 
         self.residual_vec = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
         self.workingVector = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+        self.linear_rhs_vec = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
+        self.linear_out_vec = PETSc.Vec().create(comm=PETSc.COMM_WORLD)
         self.jacobian_mat = PETSc.Mat().create(comm=PETSc.COMM_WORLD)
         self.jacobian_mat.setType('aijcusparse')
         self.snes.setFunction(self.residual_callback, self.residual_vec)
         self.snes.setJacobian(self.jacobian_callback, self.jacobian_mat, self.jacobian_mat)
 
         #DEBUG PRINT
-        print("PETScNonlinearSolver __post_init__ complete")
+        #print("PETScNonlinearSolver __post_init__ complete")
 
 
     def _ensure_size(self, x0: jnp.ndarray):
@@ -376,6 +428,16 @@ class PETScNonlinearSolver:
             self.workingVector.setSizes((PETSc.DECIDE, x0.shape[0]))
             self.workingVector.setUp()
 
+        if self.linear_rhs_vec.getType() is None:
+            self.linear_rhs_vec.setType("cuda")
+            self.linear_rhs_vec.setSizes((PETSc.DECIDE, x0.shape[0]))
+            self.linear_rhs_vec.setUp()
+
+        if self.linear_out_vec.getType() is None:
+            self.linear_out_vec.setType("cuda")
+            self.linear_out_vec.setSizes((PETSc.DECIDE, x0.shape[0]))
+            self.linear_out_vec.setUp()
+
     def solve(self, x0: jnp.ndarray):
         """Solve nonlinear problem with this SNES object and return a PETSc Vec.
 
@@ -385,82 +447,59 @@ class PETScNonlinearSolver:
         """
 
         #DEBUG PRINT
-        print("Inside PETScNonlinearSolver solve")
+        #print("Inside PETScNonlinearSolver solve")
 
         solve_start = perf_counter()
         self._ensure_size(x0)
 
         conversion_start = perf_counter()
 
-        #DEBUG PRINT
-        print("PETScNonlinearSolver solve: converting x0 JAX array to petscVec")
-        x0_vec = jax_array_to_petsc_vec(x0)
-
-        print("!!!!!!!!!!!!!!!!!!!!!!!!! x passed to nonlinearsolver:",jnp.linalg.norm(x0))
-
-        #DEBUG PRINT
-        print("PETScNonlinearSolver solve: finished converting x0 to petscVec")
-        
+        # Copy directly into persistent PETSc-owned storage.  Constructing a
+        # temporary DLPack Vec and then copying it into ``workingVector`` adds
+        # allocation/destruction overhead without avoiding this device copy.
+        assign_petsc_vec_from_jax(self.workingVector, x0)
         conversion_time = perf_counter() - conversion_start
 
+        copy_time = 0.0
+        petsc_start = perf_counter()
 
+        #DEBUG PRINT
+        #print("PETScNonlinearSolver solve: calling self.snes.solve")
+        self.snes.solve(None, self.workingVector)
 
-        try:
-            copy_start = perf_counter()
+        #DEBUG PRINT
+        #print("PETScNonlinearSolver solve: finished calling self.snes.solve")
 
-           
-            #DEBUG PRINT
-            print("PETScNonlinearSolver solve: copying x0 into workingVector petscVec")    
-            x0_vec.copy(self.workingVector)
+        petsc_time = perf_counter() - petsc_start
+        self.last_diagnostics = {
+            "total_s": perf_counter() - solve_start,
+            "input_conversion_s": conversion_time,
+            "initial_copy_s": copy_time,
+            "snes_solve_s": petsc_time,
+            "snes_iterations": self.snes.getIterationNumber(),
+            "snes_function_norm": self.snes.getFunctionNorm(),
+            "snes_ksp_iterations": self.snes.getKSP().getIterationNumber(),
+            "callback_stats": dict(self.callback_stats or {}),
+        }
 
-            
-            #DEBUG PRINT
-            print("PETScNonlinearSolver solve: finished copying x0 into workingVector petscVec")    
+        #DEBUG PRINT
+        #print("finished PETScNonlinearSolver solve")
 
-
-            copy_time = perf_counter() - copy_start
-            petsc_start = perf_counter()
-
-            #DEBUG PRINT
-            print("PETScNonlinearSolver solve: calling self.snes.solve")  
-            self.snes.solve(None, self.workingVector)
-
-            #DEBUG PRINT
-            print("PETScNonlinearSolver solve: finished calling self.snes.solve")  
-
-
-            petsc_time = perf_counter() - petsc_start
-            self.last_diagnostics = {
-                "total_s": perf_counter() - solve_start,
-                "input_conversion_s": conversion_time,
-                "initial_copy_s": copy_time,
-                "snes_solve_s": petsc_time,
-                "snes_iterations": self.snes.getIterationNumber(),
-                "snes_function_norm": self.snes.getFunctionNorm(),
-                "snes_ksp_iterations": self.snes.getKSP().getIterationNumber(),
-                "callback_stats": dict(self.callback_stats or {}),
-            }
-
-            #DEBUG PRINT
-            print("finished PETScNonlinearSolver solve")
-
-            if self.diagnostics:
-                print("PETSc SNES diagnostics:", self.last_diagnostics)
-            return self.workingVector
-        finally:
-            x0_vec.destroy()  #I wonder, can we just keep using x0_vec and updating it?
+        if self.diagnostics:
+            print("PETSc SNES diagnostics:", self.last_diagnostics)
+        return self.workingVector
 
     def solve_to_jax(self, x0):
         """Solve and explicitly copy the PETSc Vec result into a JAX array."""
 
         #DEBUG PRINT
-        print("PETScNonlinearSolver solve_to_jax starting")
+        #print("PETScNonlinearSolver solve_to_jax starting")
 
         
         x = self.solve(x0)
 
         #DEBUG PRINT
-        print("PETScNonlinearSolver solve_to_jax: completed solve call")
+        #print("PETScNonlinearSolver solve_to_jax: completed solve call")
 
 
         # ``x`` is ``self.workingVector``. Copy its contents into JAX-owned
@@ -489,28 +528,58 @@ class PETScNonlinearSolver:
         """
         del x_linearized
         ksp = self.snes.getKSP()
-        rhs_vec = jax_array_to_petsc_vec(rhs)
-        out_vec = rhs_vec.duplicate()
+        self._ensure_size(rhs)
+        rhs_vec = self.linear_rhs_vec
+        out_vec = self.linear_out_vec
+        assign_petsc_vec_from_jax(rhs_vec, rhs)
+        if x_0 is None:
+            ksp.setInitialGuessNonzero(False)
+        else:
+            assign_petsc_vec_from_jax(out_vec, x_0)
+            ksp.setInitialGuessNonzero(True)
+        if transpose:
+            ksp.solveTranspose(rhs_vec, out_vec)
+        else:
+            ksp.solve(rhs_vec, out_vec)
+        result = petsc_vec_to_jax_array(out_vec).copy()
+        result.block_until_ready()
+        return result
+
+    def solve_from_device_buffers(
+        self,
+        out,
+        rhs,
+        *,
+        transpose: bool = False,
+        x0=None,
+    ) -> None:
+        """Solve the current SNES KSP directly into a JAX GPU output buffer.
+
+        This is the device-resident counterpart to :meth:`linear_solve` for
+        use from JAX's ``buffer_callback``.  PETSc Vec wrappers are temporary,
+        but their data pointers alias the JAX callback buffers, so no host
+        transfer or PETSc-owned RHS/output allocation is involved.
+        """
+        import cupy as cp
+
+        rhs_cupy = cp.from_dlpack(rhs, copy=False)
+        out_cupy = cp.asarray(out)
+        rhs_vec = PETSc.Vec().createWithDLPack(rhs_cupy, size=rhs_cupy.size)
+        out_vec = PETSc.Vec().createWithDLPack(out_cupy, size=out_cupy.size)
+        ksp = self.snes.getKSP()
         try:
-            if x_0 is None:
+            if x0 is None:
                 ksp.setInitialGuessNonzero(False)
             else:
-                x0_vec = jax_array_to_petsc_vec(x_0)
-                try:
-                    x0_vec.copy(out_vec)
-                finally:
-                    x0_vec.destroy()
+                out_cupy[...] = cp.from_dlpack(x0, copy=False)
                 ksp.setInitialGuessNonzero(True)
             if transpose:
                 ksp.solveTranspose(rhs_vec, out_vec)
             else:
                 ksp.solve(rhs_vec, out_vec)
-            result = petsc_vec_to_jax_array(out_vec).copy()
-            result.block_until_ready()
-            return result
         finally:
-            rhs_vec.destroy()
             out_vec.destroy()
+            rhs_vec.destroy()
 
     def cleanup_work_vectors(self):
         """Destroy residual/Jacobian objects that depend on vector size."""
@@ -521,6 +590,12 @@ class PETScNonlinearSolver:
         if self.workingVector is not None:
             self.workingVector.destroy()
             self.workingVector = None
+        if self.linear_rhs_vec is not None:
+            self.linear_rhs_vec.destroy()
+            self.linear_rhs_vec = None
+        if self.linear_out_vec is not None:
+            self.linear_out_vec.destroy()
+            self.linear_out_vec = None
         if self.jacobian_mat is not None:
             self.jacobian_mat.destroy()
             self.jacobian_mat = None
@@ -529,7 +604,7 @@ class PETScNonlinearSolver:
         """Destroy all PETSc objects owned by this wrapper."""
 
         #DEBUG PRINT
-        print("PETScNonlinearSolver destroy self called")
+        #print("PETScNonlinearSolver destroy self called")
 
         self.cleanup_work_vectors()
         self.snes.destroy()
